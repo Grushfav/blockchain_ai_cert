@@ -1,0 +1,14 @@
+node_modules/
+artifacts/
+cache/
+.env
+.env.local
+*.log
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+backend/instance/
+frontend/dist/
+.DS_Store
