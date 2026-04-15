@@ -369,6 +369,13 @@ td.actions button {
   font-size: 0.9rem;
 }
 
+.hint {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--muted, #9aa3b2);
+  line-height: 1.45;
+}
+
 .result {
   margin-top: 1.5rem;
 }

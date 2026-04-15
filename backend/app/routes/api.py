@@ -6,6 +6,7 @@ from typing import Any
 import requests
 from eth_account import Account
 from flask import Blueprint, jsonify, request
+from web3 import Web3
 from flask_jwt_extended import create_access_token, get_jwt, jwt_required
 
 from app.config import Config
@@ -323,6 +324,17 @@ def verify_token(token_id: int):
     if not Config.TRUCERT_CONTRACT_ADDRESS:
         return jsonify({"error": "TRUCERT_CONTRACT_ADDRESS is not configured"}), 503
     w3 = blockchain_service.get_w3()
+    checksum = Web3.to_checksum_address(Config.TRUCERT_CONTRACT_ADDRESS.strip())
+    if len(w3.eth.get_code(checksum)) == 0:
+        return jsonify(
+            {
+                "error": (
+                    "TRUCERT_CONTRACT_ADDRESS has no contract bytecode on Polygon Amoy. "
+                    "Set it to the TruCert address from "
+                    "`npx hardhat run scripts/deploy.js --network polygonAmoy` — not a university or student wallet."
+                )
+            }
+        ), 503
     contract = blockchain_service.get_contract(w3)
     try:
         onchain = blockchain_service.read_certificate_public(w3, contract, token_id)
@@ -330,7 +342,16 @@ def verify_token(token_id: int):
         return jsonify({"error": f"Chain read failed: {e!s}"}), 502
 
     if not onchain.get("exists"):
-        return jsonify({"token_id": token_id, "exists": False})
+        return jsonify(
+            {
+                "token_id": token_id,
+                "exists": False,
+                "hint": (
+                    "This token ID is not minted on the configured contract, or the contract/network "
+                    "does not match where the certificate was issued."
+                ),
+            }
+        )
 
     uri = onchain.get("metadata_uri") or ""
     offchain: dict[str, Any] | None = None

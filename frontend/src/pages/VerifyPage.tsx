@@ -15,6 +15,7 @@ type VerifyResponse = {
   on_chain?: OnChain;
   off_chain_metadata?: Record<string, unknown>;
   error?: string;
+  hint?: string;
 };
 
 export function VerifyPage() {
@@ -131,6 +132,7 @@ export function VerifyPage() {
         {result && !result.exists && (
           <div className="result">
             <p>No certificate exists for this token ID on the configured contract.</p>
+            {result.hint && <p className="hint">{result.hint}</p>}
           </div>
         )}
       </section>

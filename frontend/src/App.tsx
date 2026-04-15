@@ -17,17 +17,19 @@ export default function App() {
         <Route
           path="/admin"
           element={
-            <ProtectedRoute role="admin">
-              <AdminPage />
-            </ProtectedRoute>
+            // <ProtectedRoute role="admin">
+            //   <AdminPage />
+            // </ProtectedRoute>
+            <AdminPage />
           }
         />
         <Route
           path="/university"
           element={
-            <ProtectedRoute role="university">
-              <UniversityPage />
-            </ProtectedRoute>
+            // <ProtectedRoute role="university">
+            //   <UniversityPage />
+            // </ProtectedRoute>
+            <UniversityPage />
           }
         />
         <Route path="*" element={<Navigate to="/" replace />} />
