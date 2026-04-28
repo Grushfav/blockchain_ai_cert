@@ -8,7 +8,13 @@ export function RegisterPage() {
   const [domainEmail, setDomainEmail] = useState("");
   const [contactEmail, setContactEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [issuerKey, setIssuerKey] = useState("");
+  const [issuerWallet, setIssuerWallet] = useState("");
+  const [institutionContactEmail, setInstitutionContactEmail] = useState("");
+  const [institutionContactPhone, setInstitutionContactPhone] = useState("");
+  const [institutionWebsite, setInstitutionWebsite] = useState("");
+  const [institutionLicenseId, setInstitutionLicenseId] = useState("");
+  const [institutionLicenseAuthority, setInstitutionLicenseAuthority] = useState("");
+  const [institutionLicenseValidUntil, setInstitutionLicenseValidUntil] = useState("");
   const [kycNotes, setKycNotes] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -20,7 +26,7 @@ export function RegisterPage() {
     setOk(null);
     setBusy(true);
     try {
-      const data = await apiJson<{ message: string; derived_wallet_address: string }>(
+      const data = await apiJson<{ message: string; issuer_wallet_address: string }>(
         "/api/auth/register-university",
         {
           method: "POST",
@@ -30,13 +36,19 @@ export function RegisterPage() {
             domain_email: domainEmail,
             contact_email: contactEmail,
             password,
-            issuer_private_key: issuerKey,
+            issuer_wallet_address: issuerWallet,
+            institution_contact_email: institutionContactEmail,
+            institution_contact_phone: institutionContactPhone,
+            institution_website: institutionWebsite,
+            institution_license_id: institutionLicenseId,
+            institution_license_authority: institutionLicenseAuthority,
+            institution_license_valid_until: institutionLicenseValidUntil,
             kyc_notes: kycNotes || undefined,
           },
         }
       );
       setOk(
-        `${data.message} Issuer wallet (derived): ${data.derived_wallet_address}. Fund this wallet on Amoy for gas.`
+        `${data.message} Issuer wallet: ${data.issuer_wallet_address}. Use this same wallet in MetaMask for chain actions.`
       );
     } catch (caught: unknown) {
       setErr(caught instanceof Error ? caught.message : "Registration failed");
@@ -51,8 +63,8 @@ export function RegisterPage() {
         <h1>Register university</h1>
         <p>
           Submit your institution for manual verification. Contact email must match your{" "}
-          <code>domain_email</code>. The issuer private key is encrypted at rest; fund the derived
-          wallet with Amoy MATIC for minting.
+          <code>domain_email</code>. Submit only your issuer wallet address; private keys remain in
+          your wallet and never leave the browser.
         </p>
       </header>
 
@@ -101,16 +113,77 @@ export function RegisterPage() {
             />
           </div>
           <div>
-            <label htmlFor="issuer_private_key">Issuer private key (32-byte hex, 0x optional)</label>
-            <textarea
-              id="issuer_private_key"
+            <label htmlFor="issuer_wallet">Issuer wallet address (0x…)</label>
+            <input
+              id="issuer_wallet"
               className="mono"
-              rows={2}
-              value={issuerKey}
-              onChange={(e) => setIssuerKey(e.target.value)}
+              value={issuerWallet}
+              onChange={(e) => setIssuerWallet(e.target.value)}
               required
-              placeholder="0x…"
+              placeholder="0x..."
             />
+          </div>
+          <div className="row two-col">
+            <div>
+              <label htmlFor="inst_email">Institution contact email</label>
+              <input
+                id="inst_email"
+                type="email"
+                value={institutionContactEmail}
+                onChange={(e) => setInstitutionContactEmail(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label htmlFor="inst_phone">Institution contact phone</label>
+              <input
+                id="inst_phone"
+                value={institutionContactPhone}
+                onChange={(e) => setInstitutionContactPhone(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+          <div className="row two-col">
+            <div>
+              <label htmlFor="inst_web">Institution website (https://...)</label>
+              <input
+                id="inst_web"
+                value={institutionWebsite}
+                onChange={(e) => setInstitutionWebsite(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label htmlFor="inst_lic">Institution license ID</label>
+              <input
+                id="inst_lic"
+                value={institutionLicenseId}
+                onChange={(e) => setInstitutionLicenseId(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+          <div className="row two-col">
+            <div>
+              <label htmlFor="inst_auth">License authority</label>
+              <input
+                id="inst_auth"
+                value={institutionLicenseAuthority}
+                onChange={(e) => setInstitutionLicenseAuthority(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label htmlFor="inst_valid">License valid until (YYYY-MM-DD)</label>
+              <input
+                id="inst_valid"
+                type="date"
+                value={institutionLicenseValidUntil}
+                onChange={(e) => setInstitutionLicenseValidUntil(e.target.value)}
+                required
+              />
+            </div>
           </div>
           <div>
             <label htmlFor="kyc">KYC / notes (optional)</label>

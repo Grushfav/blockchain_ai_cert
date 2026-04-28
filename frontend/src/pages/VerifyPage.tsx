@@ -1,140 +1,180 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { API_BASE } from "../api/client";
 
-type OnChain = {
-  issuer_address: string;
-  owner_address: string;
-  locked: boolean;
-  valid: boolean;
-  metadata_uri: string;
-};
-
-type VerifyResponse = {
-  token_id: number;
-  exists: boolean;
-  on_chain?: OnChain;
+type FieldVerifyResponse = {
+  matched: boolean;
+  token_id?: number;
+  core_hash?: string;
+  on_chain?: {
+    issuer_address: string;
+    owner_address: string;
+    locked: boolean;
+    valid: boolean;
+    metadata_uri: string;
+    core_hash?: string | null;
+    exists?: boolean;
+  };
   off_chain_metadata?: Record<string, unknown>;
   error?: string;
-  hint?: string;
 };
 
 export function VerifyPage() {
-  const [tokenId, setTokenId] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<VerifyResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [fieldLoading, setFieldLoading] = useState(false);
+  const [fieldResult, setFieldResult] = useState<FieldVerifyResponse | null>(null);
+  const [fieldErr, setFieldErr] = useState<string | null>(null);
+  const [institutionName, setInstitutionName] = useState("");
+  const [studentName, setStudentName] = useState("");
+  const [degreeType, setDegreeType] = useState("");
+  const [certId, setCertId] = useState("");
+  const [issueDate, setIssueDate] = useState("");
 
-  const canSubmit = useMemo(() => tokenId.trim().length > 0 && !loading, [tokenId, loading]);
-
-  async function verify(e: React.FormEvent) {
+  async function verifyByFields(e: React.FormEvent) {
     e.preventDefault();
-    setErr(null);
-    setResult(null);
-    const id = Number(tokenId.trim());
-    if (!Number.isInteger(id) || id < 0) {
-      setErr("Enter a valid non-negative integer token ID.");
-      return;
-    }
-    setLoading(true);
+    setFieldErr(null);
+    setFieldResult(null);
+    setFieldLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/verify/${id}`);
-      const data = (await res.json()) as VerifyResponse & { error?: string };
+      const res = await fetch(`${API_BASE}/api/verify/fields`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          institution_name: institutionName,
+          student_name: studentName,
+          degree_type: degreeType,
+          cert_id: certId,
+          issue_date: issueDate,
+        }),
+      });
+      const data = (await res.json()) as FieldVerifyResponse & { error?: string };
       if (!res.ok) {
-        setErr(data.error || res.statusText || "Verification failed");
+        let msg = data.error || res.statusText || "Field verification failed";
+        if ((data.error || "").toLowerCase().includes("indexed hash")) {
+          msg =
+            `${msg}. Check that issue date is the exact issued value in YYYY-MM-DD ` +
+            `(submitted: ${issueDate || "empty"}).`;
+        }
+        setFieldErr(msg);
         return;
       }
-      setResult(data);
+      setFieldResult(data);
     } catch (caught: unknown) {
-      setErr(caught instanceof Error ? caught.message : "Network error");
+      setFieldErr(caught instanceof Error ? caught.message : "Network error");
     } finally {
-      setLoading(false);
+      setFieldLoading(false);
     }
   }
 
   return (
     <>
       <header>
-        <h1>Verify certificate</h1>
-        <p>
-          Enter a certificate token ID to load on-chain facts and IPFS metadata (Polygon Amoy
-          testnet).
-        </p>
+        <h1>Certificate verification</h1>
+        <p>Verify credentials by exact issued fields. Document upload flow is coming soon.</p>
       </header>
 
-      <section className="panel">
-        <form onSubmit={verify}>
-          <label htmlFor="tid">Token ID</label>
-          <div className="row">
-            <input
-              id="tid"
-              type="text"
-              inputMode="numeric"
-              placeholder="e.g. 1001"
-              value={tokenId}
-              onChange={(e) => setTokenId(e.target.value)}
-              autoComplete="off"
-            />
-            <button type="submit" disabled={!canSubmit}>
-              {loading ? "Checking…" : "Verify"}
-            </button>
-          </div>
-        </form>
-
-        {err && <div className="error">{err}</div>}
-
-        {result && result.exists && result.on_chain && (
-          <div className="result">
-            <h2>On-chain</h2>
-            <div className="grid">
-              <div className="kv">
-                <span>Issuer</span>
-                <span>{result.on_chain.issuer_address}</span>
-              </div>
-              <div className="kv">
-                <span>Owner</span>
-                <span>{result.on_chain.owner_address}</span>
-              </div>
-              <div className="kv">
-                <span>Locked (SBT)</span>
-                <span>
-                  {result.on_chain.locked ? (
-                    <span className="badge ok">Yes</span>
-                  ) : (
-                    <span className="badge bad">No (escrow / transferable)</span>
-                  )}
-                </span>
-              </div>
-              <div className="kv">
-                <span>Valid</span>
-                <span>
-                  {result.on_chain.valid ? (
-                    <span className="badge ok">Valid</span>
-                  ) : (
-                    <span className="badge bad">Revoked</span>
-                  )}
-                </span>
-              </div>
-              <div className="kv">
-                <span>Metadata URI</span>
-                <span>{result.on_chain.metadata_uri}</span>
-              </div>
+      <section className="panel verify-card">
+        <h2 className="verify-title">Verify by Fields</h2>
+        <form className="stack verify-form" onSubmit={verifyByFields}>
+          <div className="row two-col">
+            <div>
+              <label htmlFor="vf_inst">Institution name</label>
+              <input
+                id="vf_inst"
+                placeholder="e.g. Massachusetts Institute of Technology"
+                value={institutionName}
+                onChange={(e) => setInstitutionName(e.target.value)}
+                required
+              />
             </div>
-
-            {result.off_chain_metadata && (
+            <div>
+              <label htmlFor="vf_student">Student name</label>
+              <input
+                id="vf_student"
+                placeholder="e.g. John Doe"
+                value={studentName}
+                onChange={(e) => setStudentName(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+          <div className="row two-col">
+            <div>
+              <label htmlFor="vf_degree">Degree type</label>
+              <input
+                id="vf_degree"
+                placeholder="e.g. B.A."
+                value={degreeType}
+                onChange={(e) => setDegreeType(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label htmlFor="vf_cert">Certificate ID</label>
+              <input
+                id="vf_cert"
+                placeholder="ID-8829"
+                value={certId}
+                onChange={(e) => setCertId(e.target.value)}
+                required
+              />
+            </div>
+          </div>
+          <div>
+            <label htmlFor="vf_date">Issue date (YYYY-MM-DD)</label>
+            <input
+              id="vf_date"
+              type="date"
+              value={issueDate}
+              onChange={(e) => setIssueDate(e.target.value)}
+              required
+            />
+            <p className="muted-inline small">Submitting as: {issueDate || "—"}</p>
+          </div>
+          <p className="muted-inline small">Field values must match issued certificate formatting exactly.</p>
+          <button type="submit" disabled={fieldLoading}>
+            {fieldLoading ? "Verifying..." : "Verify"}
+          </button>
+        </form>
+        {fieldErr && <div className="error">{fieldErr}</div>}
+        {fieldResult?.matched && (
+          <div className="result">
+            <p>Matched token ID: <strong>{fieldResult.token_id}</strong></p>
+            <p className="mono small">Core hash: {fieldResult.core_hash}</p>
+            {fieldResult.off_chain_metadata && (
               <div className="meta-block">
                 <h3>Off-chain metadata (IPFS JSON)</h3>
-                <pre className="json">{JSON.stringify(result.off_chain_metadata, null, 2)}</pre>
+                <pre className="json">{JSON.stringify(fieldResult.off_chain_metadata, null, 2)}</pre>
               </div>
             )}
           </div>
         )}
+      </section>
 
-        {result && !result.exists && (
-          <div className="result">
-            <p>No certificate exists for this token ID on the configured contract.</p>
-            {result.hint && <p className="hint">{result.hint}</p>}
+      <section className="panel verify-card">
+        <div className="verify-head-row">
+          <h2 className="verify-title">Verify by Document</h2>
+          <span className="coming-soon">COMING SOON</span>
+        </div>
+        <div className="doc-dropzone">
+          <p className="doc-drop-title">Select Certificate Document</p>
+          <p className="doc-drop-sub">Supports PDF, PNG, JPG (Max 5MB)</p>
+        </div>
+        <div className="stack">
+          <div>
+            <label>Institution name (optional)</label>
+            <input type="text" disabled />
           </div>
-        )}
+          <div>
+            <label>Candidate name (optional)</label>
+            <input type="text" disabled />
+          </div>
+          <div className="warn-banner">
+            Document upload is available for secure storage; automated extraction and verification
+            against ledger will be enabled in a future release.
+          </div>
+          <button type="button" disabled>
+            Upload & verify (coming soon)
+          </button>
+        </div>
       </section>
 
       <footer>TruCert — UWI capstone · Flask API + Polygon + IPFS (Pinata)</footer>

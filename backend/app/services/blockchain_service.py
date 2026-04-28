@@ -9,6 +9,8 @@ from web3.middleware import geth_poa_middleware
 
 from app.config import Config
 
+_last_good_rpc_url: str | None = None
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
@@ -22,11 +24,48 @@ def _load_abi() -> list[dict[str, Any]]:
         return json.load(f)["abi"]
 
 
-def get_w3() -> Web3:
-    w3 = Web3(Web3.HTTPProvider(Config.POLYGON_AMOY_RPC_URL))
+def _rpc_urls() -> list[str]:
+    urls: list[str] = []
+    primary = (Config.POLYGON_AMOY_RPC_URL or "").strip()
+    if primary:
+        urls.append(primary)
+    raw_fallbacks = (Config.POLYGON_AMOY_RPC_FALLBACK_URLS or "").strip()
+    if raw_fallbacks:
+        for part in raw_fallbacks.split(","):
+            u = part.strip()
+            if u and u not in urls:
+                urls.append(u)
+    return urls
+
+
+def _make_w3(url: str) -> Web3:
+    w3 = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 20}))
     # Polygon (Amoy) reports extraData length incompatible with default validator
     w3.middleware_onion.inject(geth_poa_middleware, layer=0)
     return w3
+
+
+def get_w3() -> Web3:
+    global _last_good_rpc_url
+    urls = _rpc_urls()
+    if not urls:
+        raise ValueError("No Polygon Amoy RPC URL configured")
+
+    if _last_good_rpc_url and _last_good_rpc_url in urls:
+        urls = [_last_good_rpc_url] + [u for u in urls if u != _last_good_rpc_url]
+
+    last_error: Exception | None = None
+    for url in urls:
+        try:
+            w3 = _make_w3(url)
+            # Probe the endpoint so callers don't fail later on first RPC call.
+            _ = w3.eth.chain_id
+            _last_good_rpc_url = url
+            return w3
+        except Exception as e:
+            last_error = e
+            continue
+    raise RuntimeError(f"All configured Polygon Amoy RPC endpoints failed: {last_error}")
 
 
 def get_contract(w3: Web3) -> Contract:
@@ -90,55 +129,6 @@ def set_issuer_whitelisted(w3: Web3, contract: Contract, issuer: str, allowed: b
     )
 
 
-def mint_to_escrow(
-    w3: Web3,
-    contract: Contract,
-    issuer_private_key: str,
-    token_id: int,
-    token_uri: str,
-) -> str:
-    return send_contract_tx(
-        w3,
-        contract,
-        issuer_private_key,
-        "mintToEscrow",
-        token_id,
-        token_uri,
-    )
-
-
-def claim_certificate(
-    w3: Web3,
-    contract: Contract,
-    issuer_private_key: str,
-    token_id: int,
-    student_wallet: str,
-) -> str:
-    return send_contract_tx(
-        w3,
-        contract,
-        issuer_private_key,
-        "claim",
-        token_id,
-        Web3.to_checksum_address(student_wallet),
-    )
-
-
-def revoke_certificate(
-    w3: Web3,
-    contract: Contract,
-    signer_private_key: str,
-    token_id: int,
-) -> str:
-    return send_contract_tx(
-        w3,
-        contract,
-        signer_private_key,
-        "revokeCertificate",
-        token_id,
-    )
-
-
 def read_certificate_public(w3: Web3, contract: Contract, token_id: int) -> dict[str, Any]:
     """Read-only: on-chain verification fields + tokenURI."""
     try:
@@ -150,6 +140,13 @@ def read_certificate_public(w3: Web3, contract: Contract, token_id: int) -> dict
     locked = contract.functions.locked(token_id).call()
     valid = contract.functions.valid(token_id).call()
     uri = contract.functions.tokenURI(token_id).call()
+    core_hash = None
+    try:
+        raw_hash = contract.functions.coreHashOf(token_id).call()
+        core_hash = raw_hash.hex() if hasattr(raw_hash, "hex") else str(raw_hash)
+    except Exception:
+        # Legacy contract deployments do not expose coreHashOf.
+        core_hash = None
     return {
         "exists": True,
         "token_id": token_id,
@@ -158,4 +155,5 @@ def read_certificate_public(w3: Web3, contract: Contract, token_id: int) -> dict
         "locked": locked,
         "valid": valid,
         "metadata_uri": uri,
+        "core_hash": core_hash,
     }

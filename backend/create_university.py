@@ -1,59 +1,70 @@
 """
-Create a university row + portal user from an issuer private key (same rules as /api/auth/register-university).
-
-Private key: set env UNI_ISSUER_PRIVATE_KEY (64 hex, optional 0x prefix) — avoids shell history in argv.
+Create a university row + portal user with an issuer wallet address only (no private key on server).
 
 Run from the backend folder:
-  .\\.venv\\Scripts\\python create_university.py "University Name" "INTERNAL-ID" "domain.edu" "admin@domain.edu" "password"
+  .\\.venv\\Scripts\\python create_university.py "University Name" "INTERNAL-ID" "domain.edu" "admin@domain.edu" "password" "0xIssuerWallet..."
+
+Optional: set UNI_ISSUER_WALLET_ADDRESS instead of passing the last positional arg.
+
+Optional: --verify-on-chain whitelists the wallet if TRUCERT_CONTRACT_ADDRESS and CONTRACT_OWNER_PRIVATE_KEY are set.
 """
 from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
-from eth_account import Account
+from web3 import Web3
 
 from app import create_app
 from app.config import Config
 from app.extensions import db
 from app.models import University, User
 from app.services import blockchain_service
-from app.services.crypto_util import encrypt_private_key
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Create a TruCert university + university user.")
+    p = argparse.ArgumentParser(description="Create a TruCert university + university user (wallet-only).")
     p.add_argument("name", help="Display name")
     p.add_argument("internal_id", help="Unique internal_id (e.g. accreditation code)")
     p.add_argument("domain_email", help="Email domain only, e.g. example.edu")
     p.add_argument("contact_email", help="Login email; must use domain_email")
     p.add_argument("password", help="Portal password for contact_email")
     p.add_argument(
-        "--kyc-notes",
+        "issuer_wallet",
+        nargs="?",
         default=None,
-        help="Optional admin notes",
+        help="Approved issuer 0x address (or set UNI_ISSUER_WALLET_ADDRESS)",
     )
+    p.add_argument("--kyc-notes", default=None, help="Optional admin notes")
+    p.add_argument("--institution-contact-email", default=None)
+    p.add_argument("--institution-contact-phone", default=None)
+    p.add_argument("--institution-website", default=None)
+    p.add_argument("--institution-license-id", default=None)
+    p.add_argument("--institution-license-authority", default=None)
+    p.add_argument("--institution-license-valid-until", default=None, help="YYYY-MM-DD")
     p.add_argument(
         "--verify-on-chain",
         action="store_true",
-        help="If TRUCERT_CONTRACT_ADDRESS and CONTRACT_OWNER_PRIVATE_KEY are set, whitelist issuer and set verified",
+        help="Whitelist issuer on-chain and set status=verified",
     )
     args = p.parse_args()
 
-    pk = (os.environ.get("UNI_ISSUER_PRIVATE_KEY") or "").strip()
-    if not pk:
-        print("Set UNI_ISSUER_PRIVATE_KEY to the 32-byte issuer private key (hex).", file=sys.stderr)
+    wallet = (args.issuer_wallet or os.environ.get("UNI_ISSUER_WALLET_ADDRESS") or "").strip()
+    if not wallet:
+        print("Pass issuer_wallet as last argument or set UNI_ISSUER_WALLET_ADDRESS.", file=sys.stderr)
         return 1
-    if pk.startswith("0x"):
-        pk = pk[2:]
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", pk):
-        print("UNI_ISSUER_PRIVATE_KEY must be a 32-byte hex string.", file=sys.stderr)
+    if not wallet.startswith("0x") or len(wallet) != 42:
+        print("issuer_wallet must be a 0x-prefixed 20-byte address.", file=sys.stderr)
+        return 1
+    try:
+        wallet = Web3.to_checksum_address(wallet)
+    except Exception:
+        print("issuer_wallet is invalid.", file=sys.stderr)
         return 1
 
     domain = args.domain_email.strip().lower()
@@ -61,9 +72,6 @@ def main() -> int:
     if contact.split("@")[-1] != domain:
         print("contact_email must use the same domain as domain_email.", file=sys.stderr)
         return 1
-
-    account = Account.from_key("0x" + pk)
-    wallet = account.address
 
     app = create_app()
     with app.app_context():
@@ -77,13 +85,17 @@ def main() -> int:
             print(f"Issuer wallet already registered: {wallet}", file=sys.stderr)
             return 1
 
-        enc = encrypt_private_key(Config.SECRET_KEY, "0x" + pk)
         uni = University(
             name=args.name.strip(),
             internal_id=args.internal_id.strip(),
             domain_email=domain,
             wallet_address=wallet,
-            private_key_encrypted=enc,
+            institution_contact_email=args.institution_contact_email,
+            institution_contact_phone=args.institution_contact_phone,
+            institution_website=args.institution_website,
+            institution_license_id=args.institution_license_id,
+            institution_license_authority=args.institution_license_authority,
+            institution_license_valid_until=args.institution_license_valid_until,
             status="pending",
             kyc_notes=args.kyc_notes,
         )
@@ -94,7 +106,7 @@ def main() -> int:
         db.session.add(user)
         db.session.commit()
 
-        print(f"Created university id={uni.id} wallet={wallet} (pending).")
+        print(f"Created university id={uni.id} issuer_wallet={wallet} (pending).")
         print(f"  Portal login: {contact}")
 
         if args.verify_on_chain and Config.TRUCERT_CONTRACT_ADDRESS and Config.CONTRACT_OWNER_PRIVATE_KEY:

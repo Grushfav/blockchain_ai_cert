@@ -20,9 +20,22 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES = False
 
     POLYGON_AMOY_RPC_URL = os.environ.get("POLYGON_AMOY_RPC_URL", "https://rpc-amoy.polygon.technology")
+    POLYGON_AMOY_RPC_FALLBACK_URLS = os.environ.get(
+        "POLYGON_AMOY_RPC_FALLBACK_URLS",
+        "https://polygon-amoy-bor-rpc.publicnode.com",
+    )
     TRUCERT_CONTRACT_ADDRESS = os.environ.get("TRUCERT_CONTRACT_ADDRESS", "")
 
     # Signs whitelist / admin contract calls (must be contract owner).
     CONTRACT_OWNER_PRIVATE_KEY = os.environ.get("CONTRACT_OWNER_PRIVATE_KEY", "")
 
     PINATA_JWT = os.environ.get("PINATA_JWT", "")
+    PINATA_GATEWAY_BASE = os.environ.get("PINATA_GATEWAY_BASE", "https://gateway.pinata.cloud/ipfs")
+
+    # Metadata signature (Ed25519) settings.
+    TRUCERT_SIG_KID = os.environ.get("TRUCERT_SIG_KID", "")
+    TRUCERT_SIG_PRIVATE_KEY = os.environ.get("TRUCERT_SIG_PRIVATE_KEY", "")
+    # JSON map {"kid": "base64-or-hex-encoded-public-key", ...}
+    TRUCERT_SIG_PUBLIC_KEYS = os.environ.get("TRUCERT_SIG_PUBLIC_KEYS", "")
+
+    UNIVERSITY_LOGO_MAX_BYTES = int(os.environ.get("UNIVERSITY_LOGO_MAX_BYTES", str(2 * 1024 * 1024)))

@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../AuthContext";
+import trucertLogo from "../images/trucert_logo.png";
 
 export function Layout() {
   const { token, role, logout } = useAuth();
@@ -8,6 +9,7 @@ export function Layout() {
     <div className="app shell">
       <nav className="topnav">
         <Link to="/" className="brand">
+          <img src={trucertLogo} alt="TruCert logo" style={{ height: 24, verticalAlign: "middle", marginRight: 8 }} />
           TruCert
         </Link>
         <div className="nav-links">

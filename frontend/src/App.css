@@ -408,6 +408,35 @@ td.actions button {
   color: var(--muted);
 }
 
+.institution-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.institution-avatar,
+.institution-avatar-placeholder {
+  width: 68px;
+  height: 68px;
+  border-radius: 999px;
+  object-fit: cover;
+  flex: 0 0 68px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.institution-avatar {
+  border: 1px solid rgba(139, 152, 179, 0.45);
+}
+
+.institution-avatar-placeholder {
+  background: rgba(61, 139, 253, 0.2);
+  color: #cfe0ff;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
 .badge {
   display: inline-block;
   padding: 0.15rem 0.45rem;
@@ -441,6 +470,57 @@ td.actions button {
   font-size: 0.85rem;
   color: var(--muted);
   font-weight: 600;
+}
+
+.verify-card {
+  margin-bottom: 1rem;
+}
+
+.verify-title {
+  margin: 0 0 0.9rem;
+  font-size: 1.35rem;
+}
+
+.verify-form button {
+  width: 100%;
+}
+
+.verify-head-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.coming-soon {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #8fb8ff;
+  background: rgba(61, 139, 253, 0.14);
+  border: 1px solid rgba(61, 139, 253, 0.35);
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+}
+
+.doc-dropzone {
+  border: 1px dashed rgba(139, 152, 179, 0.45);
+  border-radius: 10px;
+  padding: 1.6rem 1rem;
+  text-align: center;
+  margin-bottom: 0.9rem;
+  background: rgba(14, 21, 36, 0.45);
+}
+
+.doc-drop-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.doc-drop-sub {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 pre.json {

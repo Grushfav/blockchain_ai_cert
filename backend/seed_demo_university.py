@@ -1,11 +1,14 @@
 """
-Create a demo university login + issuer wallet, optionally whitelist on-chain (verified).
+Create a demo university login + random issuer wallet (no private key stored on server).
 
 Run from the backend folder with the venv activated:
   .\\.venv\\Scripts\\python seed_demo_university.py
 
 Requires backend/.env with SECRET_KEY and (for on-chain approve) TRUCERT_CONTRACT_ADDRESS +
 CONTRACT_OWNER_PRIVATE_KEY.
+
+The script prints a one-time demo private key to stdout so you can import that account into
+MetaMask for local testing — it is never sent to the API or stored in the database.
 """
 from __future__ import annotations
 
@@ -14,7 +17,6 @@ import sys
 
 from dotenv import load_dotenv
 
-# Load .env before importing app config
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 from eth_account import Account
@@ -24,7 +26,6 @@ from app.config import Config
 from app.extensions import db
 from app.models import University, User
 from app.services import blockchain_service
-from app.services.crypto_util import encrypt_private_key
 
 DEMO_INTERNAL_ID = os.environ.get("DEMO_UNI_INTERNAL_ID", "UWI-DEMO-2026-001")
 DEMO_EMAIL = os.environ.get("DEMO_UNI_EMAIL", "trucert.demo@uwitest.edu.jm")
@@ -49,14 +50,18 @@ def main() -> int:
         kh = acc.key.hex()
         pk_hex = kh if kh.startswith("0x") else "0x" + kh
         wallet = acc.address
-        enc = encrypt_private_key(Config.SECRET_KEY, pk_hex)
 
         uni = University(
             name="UWI TruCert Demo (Test)",
             internal_id=DEMO_INTERNAL_ID,
             domain_email=DEMO_DOMAIN,
             wallet_address=wallet,
-            private_key_encrypted=enc,
+            institution_contact_email="registrar@uwitest.edu.jm",
+            institution_contact_phone="+1-876-000-0000",
+            institution_website="https://uwitest.edu.jm",
+            institution_license_id="UWI-DEMO-LIC-001",
+            institution_license_authority="Jamaica Tertiary Commission",
+            institution_license_valid_until="2030-12-31",
             status="pending",
             kyc_notes="Seeded demo university for TruCert testing.",
         )
@@ -95,10 +100,10 @@ def main() -> int:
         print(f"  Email:    {DEMO_EMAIL}")
         print(f"  Password: {DEMO_PASSWORD}")
         print()
-        print("--- Issuer private key (Amoy gas: fund this wallet with test MATIC) ---")
+        print("--- Import this key into MetaMask (demo only; never reuse in production) ---")
         print(f"  {pk_hex}")
         print()
-        print("Keep this key secret; rotate for production.")
+        print("Fund this wallet with Amoy MATIC for gas, then connect MetaMask to mint.")
         return 0
 
 

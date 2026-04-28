@@ -10,6 +10,7 @@ from flask import make_response, request
 from app.config import Config
 from app.extensions import db, jwt
 from app.models import User
+from sqlalchemy import inspect, text
 
 
 def create_app(config_class: type = Config) -> Flask:
@@ -49,6 +50,7 @@ def create_app(config_class: type = Config) -> Flask:
 
     with app.app_context():
         db.create_all()
+        _apply_lightweight_migrations()
         _bootstrap_admin(app)
 
     return app
@@ -65,3 +67,49 @@ def _bootstrap_admin(app: Flask) -> None:
     u.set_password(password)
     db.session.add(u)
     db.session.commit()
+
+
+def _apply_lightweight_migrations() -> None:
+    inspector = inspect(db.engine)
+    cols = {c["name"] for c in inspector.get_columns("certificate_records")}
+    statements: list[str] = []
+    if "cert_id" not in cols:
+        statements.append("ALTER TABLE certificate_records ADD COLUMN cert_id VARCHAR(128)")
+        statements.append("CREATE UNIQUE INDEX IF NOT EXISTS ix_certificate_records_cert_id ON certificate_records (cert_id)")
+    if "core_hash" not in cols:
+        statements.append("ALTER TABLE certificate_records ADD COLUMN core_hash VARCHAR(66)")
+    if "status" not in cols:
+        statements.append("ALTER TABLE certificate_records ADD COLUMN status VARCHAR(32) DEFAULT 'issued'")
+    if "supersedes_token_id" not in cols:
+        statements.append("ALTER TABLE certificate_records ADD COLUMN supersedes_token_id INTEGER")
+
+    uni_cols = {c["name"] for c in inspector.get_columns("universities")}
+    if "logo_uri" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN logo_uri VARCHAR(512)")
+    if "institution_contact_email" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN institution_contact_email VARCHAR(255)")
+    if "institution_contact_phone" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN institution_contact_phone VARCHAR(64)")
+    if "institution_website" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN institution_website VARCHAR(255)")
+    if "institution_license_id" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN institution_license_id VARCHAR(128)")
+    if "institution_license_authority" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN institution_license_authority VARCHAR(255)")
+    if "institution_license_valid_until" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN institution_license_valid_until VARCHAR(32)")
+    if "private_key_encrypted" in uni_cols:
+        statements.append("ALTER TABLE universities DROP COLUMN private_key_encrypted")
+
+    act_cols = {c["name"] for c in inspector.get_columns("activity_logs")}
+    if "block_timestamp" not in act_cols:
+        statements.append("ALTER TABLE activity_logs ADD COLUMN block_timestamp TIMESTAMP")
+
+    with db.engine.begin() as conn:
+        for stmt in statements:
+            try:
+                conn.execute(text(stmt))
+            except Exception:
+                if "DROP COLUMN" in stmt:
+                    continue
+                raise
