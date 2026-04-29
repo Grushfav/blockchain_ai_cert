@@ -125,6 +125,37 @@ Mint/reissue request payloads contain certificate-specific fields only:
 
 Institution contact/license fields are sourced from authenticated university profile in DB.
 
+### Batch mint (CSV → sequential wallet mints)
+
+Universities can upload a UTF-8 CSV to create a **mint batch**. Rows are validated server-side; the portal then **mints one row at a time** (prepare → MetaMask `mintToEscrow` → confirm) so `nextTokenId` stays consistent and only one row is **prepared** at a time.
+
+**CSV columns (required header row):**
+
+`cert_id,student_internal_id,student_email,student_full_name,degree_title,issue_date`
+
+Optional: `image_ipfs_uri` (must be `ipfs://` or `http(s)://`, max 512 chars).
+
+- Max rows per upload: **500** (override with `MINT_BATCH_MAX_ROWS` in `.env`).
+- `issue_date` must be `YYYY-MM-DD`.
+- `student_email` must look like a valid email.
+- `cert_id` must be unique in the file and must not already exist in `certificate_records`.
+- **Privacy:** `student_email` and `student_internal_id` are stored only on **`mint_batch_rows`** in the database. They are **not** included in pinned IPFS metadata (same pipeline as single mint: institution fields come from the university profile).
+
+**Batch API (university JWT):**
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/api/university/mint-batches` | multipart field `file` — CSV upload |
+| GET | `/api/university/mint-batches/<batch_id>` | batch summary |
+| GET | `/api/university/mint-batches/<batch_id>/rows?status=&limit=&offset=` | paginated rows |
+| POST | `/api/university/mint-batches/<batch_id>/rows/<row_id>/prepare` | pin metadata + `CertificateRecord` (same as single prepare) |
+| POST | `/api/university/mint-batches/<batch_id>/rows/<row_id>/confirm-mint` | JSON `{ tx_hash, token_id }` — validates receipt vs issuer + `CertificateMinted` |
+| GET | `/api/university/mint-batches/<batch_id>/export-errors` | CSV of `invalid` + `mint_failed` rows |
+
+**Email stub:** After a successful confirm, if `SENDGRID_API_KEY` or `SMTP_HOST` is set, the row is marked **`email_sent`** (no real SMTP implementation yet). If neither is set, the row stays **`mint_confirmed`** (email not attempted).
+
+**Database:** New tables `mint_batches` and `mint_batch_rows` are created automatically with `db.create_all()` on startup (works with **Neon Postgres** and **SQLite**).
+
 ## 3. Frontend
 
 ```powershell
@@ -158,6 +189,12 @@ Production: `npm run build` → `frontend/dist/`.
 | POST | `/api/university/logo` | university JWT |
 | POST | `/api/university/certificates/prepare-mint` | university JWT |
 | POST | `/api/university/certificates/prepare-reissue/<old_token_id>` | university JWT |
+| POST | `/api/university/mint-batches` | university JWT (multipart CSV) |
+| GET | `/api/university/mint-batches/<id>` | university JWT |
+| GET | `/api/university/mint-batches/<id>/rows` | university JWT |
+| POST | `/api/university/mint-batches/<id>/rows/<row_id>/prepare` | university JWT |
+| POST | `/api/university/mint-batches/<id>/rows/<row_id>/confirm-mint` | university JWT |
+| GET | `/api/university/mint-batches/<id>/export-errors` | university JWT |
 | GET | `/api/university/activity/basic` | university JWT |
 | GET | `/api/verify/<token_id>` | public |
 | POST | `/api/verify/fields` | public |

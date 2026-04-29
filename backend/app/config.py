@@ -39,3 +39,4 @@ class Config:
     TRUCERT_SIG_PUBLIC_KEYS = os.environ.get("TRUCERT_SIG_PUBLIC_KEYS", "")
 
     UNIVERSITY_LOGO_MAX_BYTES = int(os.environ.get("UNIVERSITY_LOGO_MAX_BYTES", str(2 * 1024 * 1024)))
+    MINT_BATCH_MAX_ROWS = int(os.environ.get("MINT_BATCH_MAX_ROWS", "500"))

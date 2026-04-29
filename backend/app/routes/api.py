@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import csv
+import io
 import json
+import os
 import re
 from typing import Any
 from urllib.parse import urlparse
 
 import requests
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 from flask_jwt_extended import create_access_token, get_jwt, jwt_required
 from web3 import Web3
 
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, University, User
+from app.models import ActivityLog, CertificateRecord, MintBatch, MintBatchRow, University, User
 from app.services import blockchain_service, metadata_signing, pinata_service
 
 bp = Blueprint("api", __name__, url_prefix="/api")
@@ -378,13 +381,19 @@ def upload_university_logo():
     )
 
 
-def _build_metadata(data: dict[str, Any], uni: University, *, supersedes_token_id: int | None = None) -> dict[str, Any]:
+def _build_metadata(
+    data: dict[str, Any],
+    uni: University,
+    *,
+    supersedes_token_id: int | None = None,
+    skip_cert_id_uniqueness: bool = False,
+) -> dict[str, Any]:
     required = ("student_name", "degree_type", "issue_date", "cert_id")
     for k in required:
         if not data.get(k):
             raise ValueError(f"Missing metadata field: {k}")
     cert_id = str(data["cert_id"]).strip()
-    if CertificateRecord.query.filter_by(cert_id=cert_id).first():
+    if not skip_cert_id_uniqueness and CertificateRecord.query.filter_by(cert_id=cert_id).first():
         raise ValueError("cert_id already exists in database")
     missing_profile = _missing_profile_fields(uni)
     if missing_profile:
@@ -995,10 +1004,16 @@ def verify_token(token_id: int):
         except Exception as e:
             offchain = {"_error": f"Could not fetch metadata: {e!s}"}
 
+    try:
+        chain_id = int(w3.eth.chain_id)
+    except Exception:
+        chain_id = 80002
     return jsonify(
         {
             "token_id": token_id,
             "exists": True,
+            "chain_id": chain_id,
+            "contract_address": checksum,
             "on_chain": {
                 "issuer_address": onchain["issuer_address"],
                 "owner_address": onchain["owner_address"],
@@ -1053,11 +1068,18 @@ def verify_by_fields():
             offchain["_signature"] = _signature_status(offchain)
         except Exception as e:
             offchain = {"_error": f"Could not fetch metadata: {e!s}"}
+    try:
+        chain_id = int(w3.eth.chain_id)
+    except Exception:
+        chain_id = 80002
+    contract_checksum = Web3.to_checksum_address(Config.TRUCERT_CONTRACT_ADDRESS.strip())
     return jsonify(
         {
             "matched": True,
             "token_id": rec.token_id,
             "core_hash": core_hash,
+            "chain_id": chain_id,
+            "contract_address": contract_checksum,
             "on_chain": {
                 "exists": onchain.get("exists"),
                 "issuer_address": onchain.get("issuer_address"),

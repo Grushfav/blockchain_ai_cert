@@ -1,22 +1,6 @@
 import { useState } from "react";
 import { API_BASE } from "../api/client";
-
-type FieldVerifyResponse = {
-  matched: boolean;
-  token_id?: number;
-  core_hash?: string;
-  on_chain?: {
-    issuer_address: string;
-    owner_address: string;
-    locked: boolean;
-    valid: boolean;
-    metadata_uri: string;
-    core_hash?: string | null;
-    exists?: boolean;
-  };
-  off_chain_metadata?: Record<string, unknown>;
-  error?: string;
-};
+import { VerifyResultView, type FieldVerifyResponse } from "../components/VerifyResultView";
 
 export function VerifyPage() {
   const [fieldLoading, setFieldLoading] = useState(false);
@@ -65,7 +49,7 @@ export function VerifyPage() {
   }
 
   return (
-    <>
+    <div className="verify-page">
       <header>
         <h1>Certificate verification</h1>
         <p>Verify credentials by exact issued fields. Document upload flow is coming soon.</p>
@@ -135,18 +119,7 @@ export function VerifyPage() {
           </button>
         </form>
         {fieldErr && <div className="error">{fieldErr}</div>}
-        {fieldResult?.matched && (
-          <div className="result">
-            <p>Matched token ID: <strong>{fieldResult.token_id}</strong></p>
-            <p className="mono small">Core hash: {fieldResult.core_hash}</p>
-            {fieldResult.off_chain_metadata && (
-              <div className="meta-block">
-                <h3>Off-chain metadata (IPFS JSON)</h3>
-                <pre className="json">{JSON.stringify(fieldResult.off_chain_metadata, null, 2)}</pre>
-              </div>
-            )}
-          </div>
-        )}
+        {fieldResult?.matched && <VerifyResultView result={fieldResult} />}
       </section>
 
       <section className="panel verify-card">
@@ -178,6 +151,6 @@ export function VerifyPage() {
       </section>
 
       <footer>TruCert — UWI capstone · Flask API + Polygon + IPFS (Pinata)</footer>
-    </>
+    </div>
   );
 }

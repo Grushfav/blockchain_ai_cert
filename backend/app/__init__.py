@@ -9,7 +9,7 @@ from flask import make_response, request
 
 from app.config import Config
 from app.extensions import db, jwt
-from app.models import User
+from app.models import ActivityLog, CertificateRecord, MintBatch, MintBatchRow, University, User
 from sqlalchemy import inspect, text
 
 
@@ -45,7 +45,9 @@ def create_app(config_class: type = Config) -> Flask:
     jwt.init_app(app)
 
     from app.routes.api import bp as api_bp
+    from app.mint_batch_routes import register_mint_batch_routes
 
+    register_mint_batch_routes(api_bp)
     app.register_blueprint(api_bp)
 
     with app.app_context():

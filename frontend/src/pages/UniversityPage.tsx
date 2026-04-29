@@ -1,7 +1,7 @@
 import { BrowserProvider, Contract, isAddress, parseUnits } from "ethers";
 import type { Eip1193Provider } from "ethers";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { API_BASE, apiJson } from "../api/client";
+import { API_BASE, apiJson, getStoredToken } from "../api/client";
 import { TRUCERT_ABI } from "../abi/trucertAbi";
 
 type Me = {
@@ -25,6 +25,23 @@ type PreparedMint = {
   metadata_uri: string;
   core_hash: string;
   cert_id: string;
+  next_token_id_hint?: number;
+  idempotent?: boolean;
+};
+
+type BatchRow = {
+  id: number;
+  row_index: number;
+  cert_id: string | null;
+  student_email: string | null;
+  student_full_name: string | null;
+  degree_title: string | null;
+  issue_date: string | null;
+  row_status: string;
+  validation_errors: unknown;
+  error_message: string | null;
+  token_id: number | null;
+  tx_hash: string | null;
 };
 
 type ActivityEvent = {
@@ -101,6 +118,22 @@ export function UniversityPage() {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [eventsErr, setEventsErr] = useState<string | null>(null);
   const [eventsBusy, setEventsBusy] = useState(false);
+
+  const [batchFile, setBatchFile] = useState<File | null>(null);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchErr, setBatchErr] = useState<string | null>(null);
+  const [batchMsg, setBatchMsg] = useState<string | null>(null);
+  const [activeBatchId, setActiveBatchId] = useState<number | null>(null);
+  const [batchSummary, setBatchSummary] = useState<{
+    total_rows: number;
+    valid_rows: number;
+    invalid_rows: number;
+    status: string;
+  } | null>(null);
+  const [invalidPreview, setInvalidPreview] = useState<BatchRow[]>([]);
+  const [queueRows, setQueueRows] = useState<BatchRow[]>([]);
+  const [batchMintBusy, setBatchMintBusy] = useState(false);
+  const [batchMintErr, setBatchMintErr] = useState<string | null>(null);
 
   const loadMe = useCallback(async () => {
     setLoadErr(null);
@@ -247,6 +280,185 @@ export function UniversityPage() {
       // best-effort; basic endpoint is the primary source for UI
     }
     await refreshActivity();
+  }
+
+  async function refreshInvalidPreview(bid?: number | null) {
+    const id = bid ?? activeBatchId;
+    if (!id) return;
+    try {
+      const data = await apiJson<{ rows: BatchRow[] }>(
+        `/api/university/mint-batches/${id}/rows?status=invalid&limit=100`
+      );
+      setInvalidPreview(data.rows);
+    } catch {
+      setInvalidPreview([]);
+    }
+  }
+
+  async function refreshQueueRows(bid?: number | null) {
+    const id = bid ?? activeBatchId;
+    if (!id) {
+      setQueueRows([]);
+      return;
+    }
+    try {
+      const data = await apiJson<{ rows: BatchRow[] }>(
+        `/api/university/mint-batches/${id}/rows?limit=500`
+      );
+      setQueueRows(data.rows);
+    } catch {
+      setQueueRows([]);
+    }
+  }
+
+  async function refreshBatchMeta(bid?: number | null) {
+    const id = bid ?? activeBatchId;
+    if (!id) return;
+    try {
+      const b = await apiJson<{
+        total_rows: number;
+        valid_rows: number;
+        invalid_rows: number;
+        status: string;
+      }>(`/api/university/mint-batches/${id}`);
+      setBatchSummary({
+        total_rows: b.total_rows,
+        valid_rows: b.valid_rows,
+        invalid_rows: b.invalid_rows,
+        status: b.status,
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function uploadMintBatch() {
+    setBatchErr(null);
+    setBatchMsg(null);
+    if (!batchFile) {
+      setBatchErr("Choose a UTF-8 CSV file.");
+      return;
+    }
+    setBatchBusy(true);
+    try {
+      const token = getStoredToken();
+      const fd = new FormData();
+      fd.append("file", batchFile);
+      const res = await fetch(`${API_BASE}/api/university/mint-batches`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        batch_id?: number;
+        summary?: { total_rows: number; valid_rows: number; invalid_rows: number; status: string };
+        error?: string;
+      };
+      if (!res.ok) throw new Error(body.error || "Upload failed");
+      const bid = body.batch_id ?? null;
+      setActiveBatchId(bid);
+      setBatchSummary(body.summary ?? null);
+      setBatchMsg(`Batch #${body.batch_id} uploaded.`);
+      setBatchFile(null);
+      if (bid != null) {
+        await refreshInvalidPreview(bid);
+        await refreshQueueRows(bid);
+        await refreshBatchMeta(bid);
+      }
+    } catch (caught: unknown) {
+      setBatchErr(caught instanceof Error ? caught.message : "Batch upload failed");
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  function nextRowToMint(rows: BatchRow[]): BatchRow | null {
+    const ok = new Set(["pending_validation", "prepared", "mint_failed"]);
+    const cand = rows.filter((r) => ok.has(r.row_status)).sort((a, b) => a.row_index - b.row_index);
+    return cand[0] ?? null;
+  }
+
+  async function mintNextBatchRow() {
+    setBatchMintErr(null);
+    setBatchMsg(null);
+    if (!activeBatchId || !queueRows.length) {
+      setBatchMintErr("Upload a batch first.");
+      return;
+    }
+    const next = nextRowToMint(queueRows);
+    if (!next) {
+      setBatchMsg("Nothing left to mint in this batch (all valid rows minted or blocked).");
+      return;
+    }
+    setBatchMintBusy(true);
+    try {
+      const prepared = await apiJson<PreparedMint>(
+        `/api/university/mint-batches/${activeBatchId}/rows/${next.id}/prepare`,
+        { method: "POST" }
+      );
+      const { contract, provider } = await getSignerContract();
+      const tx = await contract.mintToEscrow(
+        prepared.metadata_uri,
+        prepared.core_hash,
+        prepared.cert_id,
+        await amoyFeeOverrides(provider)
+      );
+      const receipt = await tx.wait();
+      if (!receipt) throw new Error("No transaction receipt");
+      let tokenId: number | null = null;
+      const addr = (me?.contract_address || "").toLowerCase();
+      for (const lg of receipt.logs) {
+        if (lg.address.toLowerCase() !== addr) continue;
+        try {
+          const ev = contract.interface.parseLog({ topics: [...lg.topics], data: lg.data });
+          if (ev?.name === "CertificateMinted") {
+            tokenId = Number(ev.args.tokenId);
+            break;
+          }
+        } catch {
+          /* skip */
+        }
+      }
+      if (tokenId == null && prepared.next_token_id_hint != null) {
+        tokenId = prepared.next_token_id_hint;
+      }
+      if (tokenId == null) throw new Error("Could not determine token ID from receipt");
+      await apiJson<{ message: string }>(
+        `/api/university/mint-batches/${activeBatchId}/rows/${next.id}/confirm-mint`,
+        {
+          method: "POST",
+          json: { tx_hash: receipt.hash, token_id: tokenId },
+        }
+      );
+      setBatchMsg(`Minted row ${next.row_index + 1} as token ${tokenId}. Tx: ${receipt.hash}`);
+      await refreshQueueRows();
+      await refreshInvalidPreview();
+      await refreshBatchMeta();
+      await syncAndRefreshActivity();
+    } catch (caught: unknown) {
+      setBatchMintErr(friendlyWalletError(caught));
+    } finally {
+      setBatchMintBusy(false);
+    }
+  }
+
+  async function downloadBatchErrorCsv() {
+    if (!activeBatchId) return;
+    const token = getStoredToken();
+    const res = await fetch(`${API_BASE}/api/university/mint-batches/${activeBatchId}/export-errors`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      setBatchErr("Could not download error report.");
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `batch-${activeBatchId}-errors.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   useEffect(() => {
@@ -724,6 +936,143 @@ export function UniversityPage() {
             {mintBusy ? "Minting…" : "Mint to escrow"}
           </button>
         </form>
+      </section>
+
+      <section className="panel">
+        <h2 className="subhead">Batch mint (CSV)</h2>
+        <p className="muted-inline small">
+          UTF-8 CSV with headers:{" "}
+          <code>
+            cert_id,student_internal_id,student_email,student_full_name,degree_title,issue_date
+          </code>
+          . Optional: <code>image_ipfs_uri</code>. Max 500 rows. Student email and internal ID are stored
+          only in the database — they are never pinned to IPFS.
+        </p>
+        <div className="stack" style={{ marginTop: "0.65rem" }}>
+          <div>
+            <label htmlFor="batch_csv">CSV file</label>
+            <input
+              id="batch_csv"
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => setBatchFile(e.target.files?.[0] || null)}
+              disabled={!verified || batchBusy}
+            />
+          </div>
+          <div className="row">
+            <button type="button" onClick={() => void uploadMintBatch()} disabled={!verified || batchBusy}>
+              {batchBusy ? "Uploading…" : "Upload & validate batch"}
+            </button>
+            {activeBatchId != null && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => void refreshQueueRows()}
+                disabled={!verified || batchBusy}
+              >
+                Refresh rows
+              </button>
+            )}
+          </div>
+          {batchSummary && (
+            <p className="muted-inline" style={{ marginTop: 0 }}>
+              Batch #{activeBatchId}: status <strong>{batchSummary.status}</strong> — total{" "}
+              {batchSummary.total_rows}, valid {batchSummary.valid_rows}, invalid {batchSummary.invalid_rows}
+            </p>
+          )}
+          {batchErr && <div className="error">{batchErr}</div>}
+          {batchMsg && <div className="success">{batchMsg}</div>}
+        </div>
+        {invalidPreview.length > 0 && (
+          <div className="table-wrap" style={{ marginTop: "0.75rem" }}>
+            <p className="muted-inline small">Invalid rows (sample)</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Row</th>
+                  <th>cert_id</th>
+                  <th>Errors</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invalidPreview.map((r) => (
+                  <tr key={r.id}>
+                    <td>{r.row_index + 1}</td>
+                    <td className="mono small">{r.cert_id || "—"}</td>
+                    <td className="mono small">
+                      {Array.isArray(r.validation_errors)
+                        ? r.validation_errors.join("; ")
+                        : String(r.validation_errors ?? "")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="stack" style={{ marginTop: "1rem" }}>
+          <p className="muted-inline small" style={{ marginTop: 0 }}>
+            Mint one row at a time: prepare on server → MetaMask signs <code>mintToEscrow</code> → confirm on
+            server. Only one row may be in <code>prepared</code> state at a time.
+          </p>
+          {batchSummary && batchSummary.valid_rows > 0 && (
+            <p className="muted-inline small">
+              Progress:{" "}
+              {
+                queueRows.filter((r) =>
+                  ["mint_confirmed", "email_sent", "email_failed"].includes(r.row_status)
+                ).length
+              }{" "}
+              / {batchSummary.valid_rows} valid rows minted
+            </p>
+          )}
+          {batchMintErr && <div className="error">{batchMintErr}</div>}
+          <div className="row">
+            <button
+              type="button"
+              onClick={() => void mintNextBatchRow()}
+              disabled={!verified || !canUseChain || batchMintBusy || activeBatchId == null}
+            >
+              {batchMintBusy ? "Minting…" : "Mint next in batch"}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => void downloadBatchErrorCsv()}
+              disabled={!verified || activeBatchId == null}
+            >
+              Download error report (CSV)
+            </button>
+          </div>
+          {queueRows.length > 0 && (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>cert_id</th>
+                    <th>Student</th>
+                    <th>Status</th>
+                    <th>Token</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {queueRows.map((r) => (
+                    <tr key={r.id}>
+                      <td>{r.row_index + 1}</td>
+                      <td className="mono small">{r.cert_id || "—"}</td>
+                      <td>{r.student_full_name || "—"}</td>
+                      <td>
+                        <span className={`status ${r.row_status}`}>{r.row_status}</span>
+                      </td>
+                      <td className="mono small">{r.token_id ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </section>
 
       <section className="panel">
