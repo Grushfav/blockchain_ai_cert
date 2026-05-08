@@ -75,14 +75,13 @@ def get_contract(w3: Web3) -> Contract:
     return w3.eth.contract(address=Web3.to_checksum_address(addr), abi=_load_abi())
 
 
-def send_contract_tx(
+def _build_and_send_raw_tx(
     w3: Web3,
     contract: Contract,
-    private_key_hex: str,
+    account: Any,
     fn_name: str,
     *args: Any,
-) -> str:
-    account = Account.from_key(private_key_hex)
+) -> dict[str, Any]:
     fn = getattr(contract.functions, fn_name)
     base: dict[str, Any] = {
         "from": account.address,
@@ -112,7 +111,129 @@ def send_contract_tx(
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
     if receipt["status"] != 1:
         raise RuntimeError(f"Transaction failed: {tx_hash.hex()}")
-    return tx_hash.hex()
+    return dict(receipt)
+
+
+def send_contract_tx(
+    w3: Web3,
+    contract: Contract,
+    private_key_hex: str,
+    fn_name: str,
+    *args: Any,
+) -> str:
+    account = Account.from_key(private_key_hex)
+    receipt = _build_and_send_raw_tx(w3, contract, account, fn_name, *args)
+    th = receipt["transactionHash"]
+    return th.hex() if hasattr(th, "hex") else str(th)
+
+
+def minter_account_address() -> str:
+    pk = (Config.TRUCERT_MINTER_PRIVATE_KEY or "").strip()
+    if not pk:
+        raise ValueError("TRUCERT_MINTER_PRIVATE_KEY is not set")
+    return Account.from_key(pk).address
+
+
+def mint_for_issuer(
+    w3: Web3,
+    contract: Contract,
+    issuer_checksum: str,
+    uri: str,
+    core_hash_hex: str,
+    cert_id: str,
+) -> tuple[int, str]:
+    """Platform minter submits mintForIssuer; returns (token_id, tx_hash_hex)."""
+    pk = (Config.TRUCERT_MINTER_PRIVATE_KEY or "").strip()
+    if not pk:
+        raise ValueError("TRUCERT_MINTER_PRIVATE_KEY is not set")
+    ch = (core_hash_hex or "").strip()
+    if not ch.startswith("0x"):
+        ch = "0x" + ch
+    core_bytes = Web3.to_bytes(hexstr=ch)
+    account = Account.from_key(pk)
+    receipt = _build_and_send_raw_tx(
+        w3,
+        contract,
+        account,
+        "mintForIssuer",
+        Web3.to_checksum_address(issuer_checksum),
+        uri,
+        core_bytes,
+        cert_id,
+    )
+    processed = contract.events.CertificateMinted().process_receipt(receipt)
+    want_cert = str(cert_id).strip()
+    token_id: int | None = None
+    for lg in processed:
+        args = lg["args"]
+        if str(args.get("certId", "")).strip() != want_cert:
+            continue
+        token_id = int(args.get("tokenId", 0))
+        break
+    if token_id is None:
+        raise RuntimeError("mintForIssuer receipt missing matching CertificateMinted log")
+    th = receipt["transactionHash"]
+    tx_hex = th.hex() if hasattr(th, "hex") else str(th)
+    if not tx_hex.startswith("0x"):
+        tx_hex = "0x" + tx_hex
+    return token_id, tx_hex
+
+
+def _safe_event_logs(event: Any, *, from_block: int, to_block: int, argument_filters: dict[str, Any] | None = None, step: int = 2000) -> list[Any]:
+    """Fetch logs in windows to avoid RPC block-range limits."""
+    logs: list[Any] = []
+    start = max(0, int(from_block))
+    end = max(start, int(to_block))
+    while start <= end:
+        current_step = max(1, int(step))
+        while True:
+            chunk_end = min(start + current_step - 1, end)
+            kwargs: dict[str, Any] = {"fromBlock": start, "toBlock": chunk_end}
+            if argument_filters is not None:
+                kwargs["argument_filters"] = argument_filters
+            try:
+                logs.extend(event.get_logs(**kwargs))
+                start = chunk_end + 1
+                break
+            except Exception as e:
+                msg = str(e).lower()
+                if "block range exceeds configured limit" in msg and current_step > 1:
+                    current_step = max(1, current_step // 2)
+                    continue
+                raise
+    return logs
+
+
+def find_minted_token_id_by_cert_id(w3: Web3, contract: Contract, *, issuer: str, cert_id: str, from_block: int = 0) -> int | None:
+    """Scan CertificateMinted logs for an issuer and return tokenId for a cert_id (if found)."""
+    try:
+        to_block = int(w3.eth.block_number)
+    except Exception:
+        to_block = 0
+    # Clamp scan window to reduce RPC load / rate limiting.
+    scan_window = max(10_000, int(getattr(Config, "RECONCILE_SCAN_BLOCKS", 200_000)))
+    if int(from_block) <= 0 and to_block > scan_window:
+        from_block = max(0, to_block - scan_window)
+    issuer_cs = Web3.to_checksum_address(issuer)
+    want = str(cert_id).strip()
+    try:
+        logs = _safe_event_logs(
+            contract.events.CertificateMinted,
+            from_block=from_block,
+            to_block=to_block,
+            argument_filters={"issuer": issuer_cs},
+        )
+    except Exception:
+        return None
+    for ev in logs:
+        try:
+            args = ev["args"]
+            if str(args.get("certId", "")).strip() != want:
+                continue
+            return int(args.get("tokenId", 0))
+        except Exception:
+            continue
+    return None
 
 
 def set_issuer_whitelisted(w3: Web3, contract: Contract, issuer: str, allowed: bool) -> str:

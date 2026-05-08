@@ -45,6 +45,8 @@ class University(db.Model):
     status = db.Column(db.String(32), nullable=False, default="pending")
     kyc_notes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Monotonic EIP-712 authorization nonce (per university). Incremented when an authorization is consumed.
+    eip712_nonce = db.Column(db.Integer, nullable=False, default=0, server_default="0")
 
     users = db.relationship("User", back_populates="university", lazy="dynamic")
     certificates = db.relationship("CertificateRecord", back_populates="university")
@@ -67,6 +69,15 @@ class MintBatch(db.Model):
     valid_rows = db.Column(db.Integer, nullable=False, default=0)
     invalid_rows = db.Column(db.Integer, nullable=False, default=0)
     error_summary = db.Column(db.Text, nullable=True)
+
+    # EIP-712 batch authorization (one signature for the whole batch commitment).
+    authorized_commitment_hex = db.Column(db.String(66), nullable=True)
+    authorized_row_ids_json = db.Column(db.Text, nullable=True)
+    authorized_payload_json = db.Column(db.Text, nullable=True)
+    authorized_nonce_snapshot = db.Column(db.Integer, nullable=True)
+    authorized_expiry_unix = db.Column(db.BigInteger, nullable=True)
+    authorized_signature_hex = db.Column(db.Text, nullable=True)
+    authorized_digest_hex = db.Column(db.String(66), nullable=True)
 
     university = db.relationship("University", back_populates="mint_batches")
     created_by = db.relationship(
@@ -135,6 +146,28 @@ class CertificateRecord(db.Model):
     university = db.relationship("University", back_populates="certificates")
 
 
+class MintAuthorizationRequest(db.Model):
+    """Pending single-mint EIP-712 authorization (prepare → sign → submit)."""
+
+    __tablename__ = "mint_authorization_requests"
+
+    id = db.Column(db.String(36), primary_key=True)
+    university_id = db.Column(db.Integer, db.ForeignKey("universities.id"), nullable=False, index=True)
+    cert_id = db.Column(db.String(128), nullable=False)
+    core_hash = db.Column(db.String(66), nullable=False)
+    metadata_uri = db.Column(db.String(512), nullable=False)
+    expected_token_id = db.Column(db.Integer, nullable=False)
+    commitment_hex = db.Column(db.String(66), nullable=False)
+    nonce_snapshot = db.Column(db.Integer, nullable=False)
+    expiry_unix = db.Column(db.BigInteger, nullable=False)
+    status = db.Column(db.String(24), nullable=False, default="pending")
+    failure_code = db.Column(db.String(64), nullable=True)
+    signature_hex = db.Column(db.Text, nullable=True)
+    digest_hex = db.Column(db.String(66), nullable=True)
+    minter_tx_hash = db.Column(db.String(66), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class ActivityLog(db.Model):
     __tablename__ = "activity_logs"
     __table_args__ = (db.UniqueConstraint("tx_hash", "log_index", name="uq_activity_tx_log"),)
@@ -149,4 +182,17 @@ class ActivityLog(db.Model):
     block_timestamp = db.Column(db.DateTime, nullable=True, index=True)
     actor = db.Column(db.String(42), nullable=True)
     details_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+
+class Notification(db.Model):
+    __tablename__ = "notifications"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    kind = db.Column(db.String(64), nullable=False, index=True)
+    title = db.Column(db.String(255), nullable=False)
+    body = db.Column(db.Text, nullable=False)
+    payload_json = db.Column(db.Text, nullable=True)
+    read_at = db.Column(db.DateTime, nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)

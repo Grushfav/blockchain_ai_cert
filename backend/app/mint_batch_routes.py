@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,7 +18,7 @@ from werkzeug.utils import secure_filename
 from app.config import Config
 from app.extensions import db
 from app.models import ActivityLog, CertificateRecord, MintBatch, MintBatchRow, University, User
-from app.services import blockchain_service, metadata_signing, pinata_service
+from app.services import blockchain_service, eip712_service, metadata_signing, notification_service, pinata_service
 
 # Late-bound to avoid circular import: set by register_mint_batch_routes
 _api_bp: Blueprint | None = None
@@ -148,18 +149,6 @@ def _serialize_row(r: MintBatchRow) -> dict[str, Any]:
     }
 
 
-def _other_prepared_row(university_id: int, exclude_row_id: int) -> MintBatchRow | None:
-    return (
-        MintBatchRow.query.join(MintBatch)
-        .filter(
-            MintBatch.university_id == university_id,
-            MintBatchRow.row_status == "prepared",
-            MintBatchRow.id != exclude_row_id,
-        )
-        .first()
-    )
-
-
 def _maybe_complete_batch(batch: MintBatch) -> None:
     rows = MintBatchRow.query.filter_by(batch_id=batch.id).all()
     terminals = {"invalid", "mint_confirmed", "email_sent", "email_failed", "mint_failed"}
@@ -214,6 +203,7 @@ def _verify_certificate_mint_receipt(
     expected_cert_id: str,
     expected_core_hash_hex: str,
     claimed_token_id: int,
+    minter_address: str | None = None,
 ) -> tuple[bool, str]:
     h = (tx_hash or "").strip()
     if not h.startswith("0x"):
@@ -235,7 +225,11 @@ def _verify_certificate_mint_receipt(
     contract_addr = Web3.to_checksum_address(contract.address)
     if Web3.to_checksum_address(tx["to"]) != contract_addr:
         return False, "tx not to TruCert contract"
-    if Web3.to_checksum_address(tx["from"]).lower() != Web3.to_checksum_address(expected_issuer).lower():
+    tx_from = Web3.to_checksum_address(tx["from"])
+    if minter_address:
+        if tx_from.lower() != Web3.to_checksum_address(minter_address).lower():
+            return False, "tx sender is not platform minter"
+    elif tx_from.lower() != Web3.to_checksum_address(expected_issuer).lower():
         return False, "tx sender is not approved issuer wallet"
     try:
         processed = contract.events.CertificateMinted().process_receipt(receipt)
@@ -500,8 +494,32 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             return jsonify({"error": f"Institution profile incomplete: missing {miss[0]}"}), 400
 
         if row.row_status == "prepared" and row.metadata_uri and row.core_hash:
-            rec = CertificateRecord.query.filter_by(cert_id=row.cert_id).first()
+            rec = CertificateRecord.query.filter_by(cert_id=row.cert_id).first() if row.cert_id else None
             tid = rec.token_id if rec else None
+            # If a row was prepared but the DB index was deleted/corrupted, recreate a fresh allocation.
+            # This keeps the batch workflow unblocked; token id is advisory until minted.
+            if tid is None and row.cert_id:
+                try:
+                    w3 = blockchain_service.get_w3()
+                    cfg_err = _require_contract_code(w3)
+                    if cfg_err:
+                        return jsonify({"error": cfg_err}), 503
+                    contract = blockchain_service.get_contract(w3)
+                    next_token_id = int(contract.functions.nextTokenId().call())
+                    rec2 = CertificateRecord.query.filter_by(token_id=next_token_id).first()
+                    if not rec2:
+                        rec2 = CertificateRecord(token_id=next_token_id, university_id=uni.id, ipfs_uri=row.metadata_uri)
+                        db.session.add(rec2)
+                    rec2.university_id = uni.id
+                    rec2.ipfs_uri = row.metadata_uri
+                    rec2.cert_id = row.cert_id
+                    rec2.core_hash = row.core_hash
+                    rec2.status = "prepared"
+                    db.session.commit()
+                    tid = next_token_id
+                except Exception:
+                    # fall back to returning idempotent response without hint
+                    tid = None
             return jsonify(
                 {
                     "metadata_uri": row.metadata_uri,
@@ -513,14 +531,6 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             )
 
         if row.row_status == "mint_failed" and row.metadata_uri and row.core_hash:
-            other_mf = _other_prepared_row(uni.id, row.id)
-            if other_mf:
-                return jsonify(
-                    {
-                        "error": "Another batch row is prepared and awaiting mint. Finish that mint before retrying this row.",
-                        "blocking_row_id": other_mf.id,
-                    }
-                ), 409
             row.row_status = "prepared"
             row.error_message = None
             db.session.commit()
@@ -535,15 +545,6 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                     "idempotent": True,
                 }
             )
-
-        other = _other_prepared_row(uni.id, row.id)
-        if other:
-            return jsonify(
-                {
-                    "error": "Another batch row is prepared and awaiting mint. Mint or clear it before preparing another.",
-                    "blocking_row_id": other.id,
-                }
-            ), 409
 
         try:
             metadata = _build_metadata_for_batch_row(row, uni)
@@ -594,9 +595,10 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             }
         )
 
-    @bp.post("/university/mint-batches/<int:batch_id>/rows/<int:row_id>/confirm-mint")
+    @bp.post("/university/mint-batches/<int:batch_id>/rows/<int:row_id>/reset-prepare")
     @jwt_required()
-    def confirm_mint_batch_row(batch_id: int, row_id: int):
+    def reset_prepare_batch_row(batch_id: int, row_id: int):
+        """Clear a stuck prepared row when no token exists on-chain (wallet tx never landed)."""
         _require_roles("university")
         user = _current_user()
         uni = user.university
@@ -608,21 +610,208 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         row = MintBatchRow.query.filter_by(id=row_id, batch_id=batch_id).first()
         if not row:
             return jsonify({"error": "Row not found"}), 404
-        if row.row_status not in ("prepared",):
-            return jsonify({"error": "Row is not in prepared state"}), 400
+        if row.row_status != "prepared":
+            return jsonify({"error": "Row is not in prepared state; nothing to reset."}), 400
+
+        rec = CertificateRecord.query.filter_by(cert_id=row.cert_id, university_id=uni.id).first()
+        if rec:
+            if (rec.status or "").lower() != "prepared":
+                return jsonify(
+                    {
+                        "error": "Certificate index is no longer prepared; refresh the batch list.",
+                    }
+                ), 409
+            try:
+                w3 = blockchain_service.get_w3()
+                cfg_err = _require_contract_code(w3)
+                if cfg_err:
+                    return jsonify({"error": cfg_err}), 503
+                contract = blockchain_service.get_contract(w3)
+                onchain = blockchain_service.read_certificate_public(w3, contract, rec.token_id)
+            except Exception as e:
+                return jsonify({"error": f"Chain read failed: {e!s}"}), 502
+            if onchain.get("exists"):
+                return jsonify(
+                    {
+                        "error": (
+                            "A token already exists on-chain for this certificate. "
+                            "If this is unexpected, contact support; otherwise the row may already be minted."
+                        ),
+                        "token_id": rec.token_id,
+                    }
+                ), 409
+            db.session.delete(rec)
+
+        row.metadata_uri = None
+        row.core_hash = None
+        row.prepared_at = None
+        row.row_status = "pending_validation"
+        row.error_message = None
+        b.updated_at = datetime.utcnow()
+        db.session.commit()
+        return jsonify({"message": "Prepare state cleared. You can prepare this row again."})
+
+    @bp.get("/university/mint-batches/<int:batch_id>/eip712")
+    @jwt_required()
+    def get_batch_mint_eip712(batch_id: int):
+        """Build BatchMintAuthorization typed data; persists row snapshot + commitment for later submit."""
+        _require_roles("university")
+        user = _current_user()
+        uni = user.university
+        if not uni or uni.status != "verified":
+            return jsonify({"error": "University is not verified"}), 403
+        b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
+        if not b:
+            return jsonify({"error": "Batch not found"}), 404
+        if (b.authorized_signature_hex or "").strip():
+            return jsonify(
+                {"error": "Batch already authorized. Run execute to mint, or finish outstanding mints first."}
+            ), 409
+
+        rows = (
+            MintBatchRow.query.filter_by(batch_id=batch_id).order_by(MintBatchRow.row_index.asc()).all()
+        )
+        pending: list[MintBatchRow] = []
+        for r in rows:
+            if r.row_status == "invalid":
+                continue
+            if r.row_status in ("mint_confirmed", "email_sent", "email_failed"):
+                continue
+            if r.row_status != "prepared":
+                return jsonify(
+                    {
+                        "error": (
+                            f"Row {r.row_index} must be in prepared state for batch signing "
+                            f"(currently {r.row_status})."
+                        ),
+                    }
+                ), 400
+            pending.append(r)
+
+        if not pending:
+            return jsonify({"error": "No prepared rows to authorize for this batch."}), 400
+
+        # Ensure every prepared row has a CertificateRecord allocation (token_id reservation).
+        # If an index row was deleted/corrupted after prepare, recreate it here so batch signing can proceed.
+        try:
+            w3 = blockchain_service.get_w3()
+            cfg_err = _require_contract_code(w3)
+            if cfg_err:
+                return jsonify({"error": cfg_err}), 503
+            contract = blockchain_service.get_contract(w3)
+            next_token_id_base = int(contract.functions.nextTokenId().call())
+        except Exception as e:
+            return jsonify({"error": f"Chain read failed: {e!s}"}), 502
+
+        row_hashes = [
+            eip712_service.single_mint_commitment((r.cert_id or "").strip(), (r.core_hash or "").strip())
+            for r in pending
+        ]
+        commitment = eip712_service.batch_mint_commitment(batch_id, row_hashes)
+        nonce = int(uni.eip712_nonce or 0)
+        expiry = eip712_service.default_expiry_unix()
+        payload: list[dict[str, Any]] = []
+        token_cursor = next_token_id_base
+        for r in pending:
+            rec = CertificateRecord.query.filter_by(cert_id=r.cert_id).first() if r.cert_id else None
+            if not rec:
+                # Allocate a fresh token id, avoiding collisions in the local index.
+                while CertificateRecord.query.filter_by(token_id=token_cursor).first() is not None:
+                    token_cursor += 1
+                rec = CertificateRecord(
+                    token_id=int(token_cursor),
+                    university_id=uni.id,
+                    cert_id=r.cert_id,
+                    ipfs_uri=r.metadata_uri or "",
+                    core_hash=r.core_hash or "",
+                    status="prepared",
+                )
+                db.session.add(rec)
+                db.session.flush()
+                token_cursor += 1
+            payload.append(
+                {
+                    "row_id": r.id,
+                    "row_index": r.row_index,
+                    "cert_id": r.cert_id,
+                    "core_hash": r.core_hash,
+                    "metadata_uri": r.metadata_uri,
+                    "expected_token_id": rec.token_id,
+                }
+            )
+
+        b.authorized_commitment_hex = Web3.to_hex(commitment)
+        b.authorized_row_ids_json = json.dumps([r.id for r in pending])
+        b.authorized_payload_json = json.dumps(payload)
+        b.authorized_nonce_snapshot = nonce
+        b.authorized_expiry_unix = expiry
+        b.authorized_signature_hex = None
+        b.authorized_digest_hex = None
+        b.updated_at = datetime.utcnow()
+        db.session.commit()
+
+        full = eip712_service.batch_mint_authorization_full_message(
+            issuer_address=uni.wallet_address,
+            batch_id=batch_id,
+            commitment=commitment,
+            nonce=nonce,
+            expiry_unix=expiry,
+        )
+        return jsonify(
+            {
+                "batch_id": batch_id,
+                "eip712": full,
+                "commitment": Web3.to_hex(commitment),
+                "nonce": nonce,
+                "expiry_unix": expiry,
+                "row_count": len(pending),
+            }
+        )
+
+    @bp.post("/university/mint-batches/<int:batch_id>/submit-authorization")
+    @jwt_required()
+    def submit_batch_mint_authorization(batch_id: int):
+        _require_roles("university")
+        user = _current_user()
+        uni = user.university
+        if not uni or uni.status != "verified":
+            return jsonify({"error": "University is not verified"}), 403
+        b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
+        if not b:
+            return jsonify({"error": "Batch not found"}), 404
+        if not b.authorized_commitment_hex or not b.authorized_payload_json:
+            return jsonify({"error": "Call GET /eip712 first to build batch authorization."}), 400
+        if (b.authorized_signature_hex or "").strip():
+            return jsonify({"error": "Batch authorization already submitted."}), 409
 
         body = request.get_json(silent=True) or {}
-        tx_hash = (body.get("tx_hash") or "").strip()
-        token_id = body.get("token_id")
-        if not tx_hash or token_id is None:
-            return jsonify({"error": "tx_hash and token_id are required"}), 400
-        try:
-            token_id_int = int(token_id)
-        except (TypeError, ValueError):
-            return jsonify({"error": "token_id must be an integer"}), 400
+        signature = (body.get("signature") or "").strip()
+        if not signature:
+            return jsonify({"error": "signature is required"}), 400
 
-        if not row.core_hash or not row.metadata_uri or not row.cert_id:
-            return jsonify({"error": "Row is missing prepare data"}), 400
+        if int(time.time()) > int(b.authorized_expiry_unix or 0):
+            return jsonify({"error": "Batch authorization expired; call GET /eip712 again."}), 400
+
+        if int(uni.eip712_nonce or 0) != int(b.authorized_nonce_snapshot or -1):
+            return jsonify({"error": "Nonce mismatch; refresh EIP-712 payload from GET /eip712."}), 409
+
+        ch = (b.authorized_commitment_hex or "").strip()
+        if ch.startswith("0x"):
+            ch = ch[2:]
+        commitment_bytes = bytes.fromhex(ch)
+        full = eip712_service.batch_mint_authorization_full_message(
+            issuer_address=uni.wallet_address,
+            batch_id=batch_id,
+            commitment=commitment_bytes,
+            nonce=int(b.authorized_nonce_snapshot or 0),
+            expiry_unix=int(b.authorized_expiry_unix or 0),
+        )
+        try:
+            signer = eip712_service.recover_typed_data_signer(full, signature)
+        except Exception as e:
+            return jsonify({"error": f"Invalid signature: {e!s}"}), 400
+        if signer.lower() != Web3.to_checksum_address(uni.wallet_address).lower():
+            return jsonify({"error": "Signature signer does not match university wallet"}), 403
 
         try:
             w3 = blockchain_service.get_w3()
@@ -633,73 +822,296 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         except Exception as e:
             return jsonify({"error": str(e)}), 502
 
-        ok, reason = _verify_certificate_mint_receipt(
-            w3,
-            contract,
-            tx_hash,
-            expected_issuer=uni.wallet_address,
-            expected_cert_id=row.cert_id or "",
-            expected_core_hash_hex=row.core_hash or "",
-            claimed_token_id=token_id_int,
-        )
-        if not ok:
-            row.row_status = "mint_failed"
-            row.error_message = reason
-            b.updated_at = datetime.utcnow()
-            db.session.commit()
-            return jsonify({"error": reason}), 400
-
-        rec = CertificateRecord.query.filter_by(cert_id=row.cert_id).first()
-        if not rec or rec.token_id != token_id_int:
-            return jsonify({"error": "CertificateRecord does not match minted token"}), 400
-        if rec.university_id != uni.id:
-            return jsonify({"error": "Certificate record belongs to another university"}), 403
-
-        receipt = w3.eth.get_transaction_receipt(tx_hash if tx_hash.startswith("0x") else "0x" + tx_hash)
-        rec.status = "issued"
-        row.tx_hash = tx_hash if tx_hash.startswith("0x") else "0x" + tx_hash
-        row.token_id = token_id_int
-        row.minted_at = datetime.utcnow()
-        row.row_status = "mint_confirmed"
-        row.error_message = None
-
         try:
-            processed = contract.events.CertificateMinted().process_receipt(receipt)
-            for lg in processed:
-                args = lg["args"]
-                if str(args.get("certId", "")).strip() == str(row.cert_id).strip():
-                    _li = lg.get("logIndex", lg.get("log_index", 0))
-                    log_index = int(_li) if _li is not None else 0
-                    _append_mint_activity(
-                        university_id=uni.id,
-                        token_id=token_id_int,
-                        tx_hash=row.tx_hash,
-                        block_number=int(receipt["blockNumber"]),
-                        log_index=log_index,
-                        actor=uni.wallet_address,
-                        metadata_uri=row.metadata_uri or "",
-                        cert_id=row.cert_id or "",
-                    )
-                    break
-        except Exception:
-            pass
+            if not contract.functions.whitelistedIssuers(Web3.to_checksum_address(uni.wallet_address)).call():
+                return jsonify({"error": "Issuer wallet is not whitelisted on-chain"}), 403
+        except Exception as e:
+            return jsonify({"error": f"Whitelist read failed: {e!s}"}), 502
 
-        if os.environ.get("SENDGRID_API_KEY") or os.environ.get("SMTP_HOST"):
-            row.row_status = "email_sent"
-            row.emailed_at = datetime.utcnow()
-        else:
-            row.row_status = "mint_confirmed"
-
+        digest = eip712_service.typed_data_signable_hash_hex(full)
+        b.authorized_signature_hex = signature
+        b.authorized_digest_hex = digest
+        b.status = "authorized"
+        uni.eip712_nonce = int(uni.eip712_nonce or 0) + 1
         b.updated_at = datetime.utcnow()
-        _maybe_complete_batch(b)
         db.session.commit()
 
         return jsonify(
             {
-                "message": "Mint confirmed",
-                "token_id": token_id_int,
-                "tx_hash": row.tx_hash,
-                "row_status": row.row_status,
+                "message": "Batch authorized. Call POST .../execute to run platform mints.",
+                "batch_id": batch_id,
+                "eip712_digest": digest,
+            }
+        )
+
+    @bp.post("/university/mint-batches/<int:batch_id>/execute")
+    @jwt_required()
+    def execute_batch_mints(batch_id: int):
+        """Platform minter submits mintForIssuer for each row in the authorized snapshot."""
+        _require_roles("university")
+        user = _current_user()
+        uni = user.university
+        if not uni or uni.status != "verified":
+            return jsonify({"error": "University is not verified"}), 403
+        b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
+        if not b:
+            return jsonify({"error": "Batch not found"}), 404
+        if not (b.authorized_signature_hex or "").strip():
+            return jsonify({"error": "Batch is not authorized yet (submit EIP-712 signature first)."}), 400
+
+        body = request.get_json(silent=True) or {}
+        max_mints = min(max(int(body.get("max_mints") or 25), 1), 80)
+
+        try:
+            payload: list[dict[str, Any]] = json.loads(b.authorized_payload_json or "[]")
+        except Exception:
+            return jsonify({"error": "Corrupt batch authorization payload"}), 500
+
+        try:
+            w3 = blockchain_service.get_w3()
+            cfg_err = _require_contract_code(w3)
+            if cfg_err:
+                return jsonify({"error": cfg_err}), 503
+            contract = blockchain_service.get_contract(w3)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
+
+        minter_addr = blockchain_service.minter_account_address()
+        minted_out: list[dict[str, Any]] = []
+        processed = 0
+
+        for ent in sorted(payload, key=lambda x: int(x.get("row_index", 0))):
+            if processed >= max_mints:
+                break
+            row = MintBatchRow.query.filter_by(id=int(ent["row_id"]), batch_id=batch_id).first()
+            if not row:
+                continue
+            if row.row_status in ("mint_confirmed", "email_sent", "email_failed"):
+                continue
+            if row.row_status == "invalid":
+                continue
+            if str(row.cert_id or "").strip() != str(ent.get("cert_id") or "").strip():
+                return jsonify({"error": f"Row {row.id} cert_id changed since authorization"}), 409
+            if str(row.core_hash or "").strip() != str(ent.get("core_hash") or "").strip():
+                return jsonify({"error": f"Row {row.id} core_hash changed since authorization"}), 409
+            if row.row_status != "prepared":
+                return jsonify({"error": f"Row {row.row_index} is not prepared (status {row.row_status})"}), 400
+
+            try:
+                token_id, tx_hex = blockchain_service.mint_for_issuer(
+                    w3,
+                    contract,
+                    uni.wallet_address,
+                    row.metadata_uri or "",
+                    row.core_hash or "",
+                    row.cert_id or "",
+                )
+            except Exception as e:
+                row.row_status = "mint_failed"
+                row.error_message = str(e)
+                b.updated_at = datetime.utcnow()
+                db.session.commit()
+                return jsonify({"error": f"Mint failed at row {row.row_index}: {e!s}", "partial": minted_out}), 502
+
+            # Accept token id from chain; other mints may interleave between prepare and execute.
+
+            ok, reason = _verify_certificate_mint_receipt(
+                w3,
+                contract,
+                tx_hex,
+                expected_issuer=uni.wallet_address,
+                expected_cert_id=row.cert_id or "",
+                expected_core_hash_hex=row.core_hash or "",
+                claimed_token_id=int(token_id),
+                minter_address=minter_addr,
+            )
+            if not ok:
+                row.row_status = "mint_failed"
+                row.error_message = reason
+                b.updated_at = datetime.utcnow()
+                db.session.commit()
+                return jsonify({"error": reason, "partial": minted_out}), 400
+
+            try:
+                token_id_int = int(token_id)
+                rec = CertificateRecord.query.filter_by(cert_id=row.cert_id).first() if row.cert_id else None
+                if not rec:
+                    # Collision check must also run for brand-new records, otherwise INSERT can violate UNIQUE(token_id).
+                    existing = CertificateRecord.query.filter_by(token_id=token_id_int).first()
+                    if existing:
+                        if (existing.status or "").lower() == "prepared":
+                            db.session.delete(existing)
+                            db.session.flush()
+                        else:
+                            # Attempt reconciliation: move the existing record to its real on-chain token id by certId.
+                            other_tid = blockchain_service.find_minted_token_id_by_cert_id(
+                                w3,
+                                contract,
+                                issuer=uni.wallet_address,
+                                cert_id=str(existing.cert_id or "").strip(),
+                            )
+                            if other_tid and int(other_tid) != token_id_int:
+                                # Avoid cascading collisions.
+                                if CertificateRecord.query.filter_by(token_id=int(other_tid)).first() is None:
+                                    existing.token_id = int(other_tid)
+                                    db.session.flush()
+                                else:
+                                    other_tid = None
+                            if not other_tid:
+                                return (
+                                    jsonify(
+                                        {
+                                            "error": (
+                                                "Certificate index collision on token_id; another certificate record already "
+                                                "claims this token id. Resolve in DB or rebuild the index."
+                                            ),
+                                            "collision": {
+                                                "token_id": token_id_int,
+                                                "existing_cert_id": existing.cert_id,
+                                                "existing_status": existing.status,
+                                            },
+                                        }
+                                    ),
+                                    500,
+                                )
+                    rec = CertificateRecord(
+                        token_id=token_id_int,
+                        university_id=uni.id,
+                        cert_id=row.cert_id,
+                        ipfs_uri=row.metadata_uri or "",
+                        core_hash=row.core_hash or "",
+                        status="issued",
+                    )
+                    db.session.add(rec)
+                else:
+                    other_tid = CertificateRecord.query.filter_by(token_id=token_id_int).first()
+                    if other_tid and other_tid.id != rec.id:
+                        if (other_tid.status or "").lower() == "prepared":
+                            db.session.delete(other_tid)
+                            db.session.flush()
+                        else:
+                            # Attempt reconciliation on the conflicting record if it points to a different cert.
+                            other_chain = blockchain_service.find_minted_token_id_by_cert_id(
+                                w3,
+                                contract,
+                                issuer=uni.wallet_address,
+                                cert_id=str(other_tid.cert_id or "").strip(),
+                            )
+                            if other_chain and int(other_chain) != token_id_int:
+                                if CertificateRecord.query.filter_by(token_id=int(other_chain)).first() is None:
+                                    other_tid.token_id = int(other_chain)
+                                    db.session.flush()
+                                    other_tid = None
+                            if other_tid and other_tid.id != rec.id:
+                                return (
+                                    jsonify(
+                                        {
+                                            "error": (
+                                                "Certificate index collision on token_id; another certificate record already "
+                                                "claims this token id. Resolve in DB or rebuild the index."
+                                            ),
+                                            "collision": {
+                                                "token_id": token_id_int,
+                                                "existing_cert_id": other_tid.cert_id,
+                                                "existing_status": other_tid.status,
+                                            },
+                                        }
+                                    ),
+                                    500,
+                                )
+                    rec.token_id = token_id_int
+                    rec.ipfs_uri = row.metadata_uri or rec.ipfs_uri
+                    rec.core_hash = row.core_hash or rec.core_hash
+                    rec.status = "issued"
+            except Exception as e:
+                db.session.rollback()
+                row.row_status = "mint_failed"
+                row.error_message = str(e)
+                b.updated_at = datetime.utcnow()
+                db.session.commit()
+                return jsonify({"error": f"DB update failed at row {row.row_index}: {e!s}", "partial": minted_out}), 500
+            row.tx_hash = tx_hex if tx_hex.startswith("0x") else "0x" + tx_hex
+            row.token_id = int(token_id)
+            row.minted_at = datetime.utcnow()
+            row.row_status = "mint_confirmed"
+            row.error_message = None
+
+            h = row.tx_hash
+            try:
+                receipt = w3.eth.get_transaction_receipt(h)
+                proc = contract.events.CertificateMinted().process_receipt(receipt)
+                for lg in proc:
+                    args = lg["args"]
+                    if str(args.get("certId", "")).strip() == str(row.cert_id).strip():
+                        _li = lg.get("logIndex", lg.get("log_index", 0))
+                        log_index = int(_li) if _li is not None else 0
+                        _append_mint_activity(
+                            university_id=uni.id,
+                            token_id=int(token_id),
+                            tx_hash=h,
+                            block_number=int(receipt["blockNumber"]),
+                            log_index=log_index,
+                            actor=minter_addr,
+                            metadata_uri=row.metadata_uri or "",
+                            cert_id=row.cert_id or "",
+                        )
+                        break
+            except Exception:
+                pass
+
+            if os.environ.get("SENDGRID_API_KEY") or os.environ.get("SMTP_HOST"):
+                row.row_status = "email_sent"
+                row.emailed_at = datetime.utcnow()
+            else:
+                row.row_status = "mint_confirmed"
+
+            minted_out.append({"row_id": row.id, "token_id": int(token_id), "tx_hash": h})
+            processed += 1
+
+        remaining = 0
+        for ent in payload:
+            rr = MintBatchRow.query.filter_by(id=int(ent["row_id"]), batch_id=batch_id).first()
+            if rr and rr.row_status not in ("mint_confirmed", "email_sent", "email_failed"):
+                remaining += 1
+
+        b.status = "executing" if b.status == "authorized" else b.status
+        b.updated_at = datetime.utcnow()
+        _maybe_complete_batch(b)
+
+        if minted_out:
+            # In-app notifications only; keep these aggregated to avoid one-per-row noise.
+            if remaining == 0 and b.status == "completed":
+                total_ok = (
+                    MintBatchRow.query.filter_by(batch_id=batch_id)
+                    .filter(MintBatchRow.row_status.in_(["mint_confirmed", "email_sent", "email_failed"]))
+                    .count()
+                )
+                notification_service.notify_university_users(
+                    uni.id,
+                    kind="batch_completed",
+                    title="Batch mint completed",
+                    body=f"Batch #{b.id} completed. Minted {int(total_ok)} row(s).",
+                    payload={"batch_id": int(b.id), "minted_total": int(total_ok)},
+                )
+            else:
+                notification_service.notify_university_users(
+                    uni.id,
+                    kind="batch_mint_progress",
+                    title="Batch mint progress",
+                    body=f"Minted {len(minted_out)} row(s) in batch #{b.id}. Remaining rows: {remaining}.",
+                    payload={
+                        "batch_id": int(b.id),
+                        "minted_count": int(len(minted_out)),
+                        "remaining_rows": int(remaining),
+                    },
+                )
+        db.session.commit()
+
+        return jsonify(
+            {
+                "minted": minted_out,
+                "remaining_rows": remaining,
+                "batch_status": b.status,
             }
         )
 

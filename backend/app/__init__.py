@@ -9,7 +9,16 @@ from flask import make_response, request
 
 from app.config import Config
 from app.extensions import db, jwt
-from app.models import ActivityLog, CertificateRecord, MintBatch, MintBatchRow, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    Notification,
+    University,
+    User,
+)
 from sqlalchemy import inspect, text
 
 
@@ -45,9 +54,13 @@ def create_app(config_class: type = Config) -> Flask:
     jwt.init_app(app)
 
     from app.routes.api import bp as api_bp
+    from app.admin_analytics_routes import register_admin_analytics_routes
     from app.mint_batch_routes import register_mint_batch_routes
+    from app.university_analytics_routes import register_university_analytics_routes
 
     register_mint_batch_routes(api_bp)
+    register_admin_analytics_routes(api_bp)
+    register_university_analytics_routes(api_bp)
     app.register_blueprint(api_bp)
 
     with app.app_context():
@@ -106,6 +119,28 @@ def _apply_lightweight_migrations() -> None:
     act_cols = {c["name"] for c in inspector.get_columns("activity_logs")}
     if "block_timestamp" not in act_cols:
         statements.append("ALTER TABLE activity_logs ADD COLUMN block_timestamp TIMESTAMP")
+
+    if "eip712_nonce" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN eip712_nonce INTEGER DEFAULT 0")
+
+    mb_cols = {c["name"] for c in inspector.get_columns("mint_batches")}
+    _mb_add = [
+        ("authorized_commitment_hex", "VARCHAR(66)"),
+        ("authorized_row_ids_json", "TEXT"),
+        ("authorized_payload_json", "TEXT"),
+        ("authorized_nonce_snapshot", "INTEGER"),
+        ("authorized_expiry_unix", "INTEGER"),
+        ("authorized_signature_hex", "TEXT"),
+        ("authorized_digest_hex", "VARCHAR(66)"),
+    ]
+    for col, typ in _mb_add:
+        if col not in mb_cols:
+            statements.append(f"ALTER TABLE mint_batches ADD COLUMN {col} {typ}")
+
+    if "mint_authorization_requests" in inspector.get_table_names():
+        mar_cols = {c["name"] for c in inspector.get_columns("mint_authorization_requests")}
+        if "failure_code" not in mar_cols:
+            statements.append("ALTER TABLE mint_authorization_requests ADD COLUMN failure_code VARCHAR(64)")
 
     with db.engine.begin() as conn:
         for stmt in statements:

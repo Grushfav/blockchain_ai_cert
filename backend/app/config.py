@@ -29,6 +29,16 @@ class Config:
     # Signs whitelist / admin contract calls (must be contract owner).
     CONTRACT_OWNER_PRIVATE_KEY = os.environ.get("CONTRACT_OWNER_PRIVATE_KEY", "")
 
+    # Platform minter hot wallet — submits mintForIssuer after EIP-712 university authorization.
+    TRUCERT_MINTER_PRIVATE_KEY = os.environ.get("TRUCERT_MINTER_PRIVATE_KEY", "")
+
+    # EIP-712 ({MintAuthorization},{BatchMintAuthorization}) — domain matches MetaMask / ethers signTypedData.
+    EIP712_DOMAIN_NAME = os.environ.get("EIP712_DOMAIN_NAME", "TruCert")
+    EIP712_DOMAIN_VERSION = os.environ.get("EIP712_DOMAIN_VERSION", "1")
+    EIP712_CHAIN_ID = int(os.environ.get("EIP712_CHAIN_ID", "80002"))
+    # Optional override; defaults to TRUCERT_CONTRACT_ADDRESS (the TruCert ERC-721).
+    EIP712_VERIFYING_CONTRACT = os.environ.get("EIP712_VERIFYING_CONTRACT", "").strip()
+
     PINATA_JWT = os.environ.get("PINATA_JWT", "")
     PINATA_GATEWAY_BASE = os.environ.get("PINATA_GATEWAY_BASE", "https://gateway.pinata.cloud/ipfs")
 
@@ -40,3 +50,10 @@ class Config:
 
     UNIVERSITY_LOGO_MAX_BYTES = int(os.environ.get("UNIVERSITY_LOGO_MAX_BYTES", str(2 * 1024 * 1024)))
     MINT_BATCH_MAX_ROWS = int(os.environ.get("MINT_BATCH_MAX_ROWS", "500"))
+
+    # Reconciliation scans CertificateMinted logs for cert_id → token_id. Keep this window small to avoid RPC rate limits.
+    RECONCILE_SCAN_BLOCKS = int(os.environ.get("RECONCILE_SCAN_BLOCKS", "200000"))
+
+    # Optional Google Gemini (Developer API). Backend runs fine with these unset.
+    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+    GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")

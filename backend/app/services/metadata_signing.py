@@ -4,6 +4,7 @@ import base64
 import json
 from typing import Any
 
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from app.config import Config
@@ -50,6 +51,31 @@ def _public_key_map() -> dict[str, Ed25519PublicKey]:
     out: dict[str, Ed25519PublicKey] = {}
     for kid, raw in raw_map.items():
         out[str(kid)] = Ed25519PublicKey.from_public_bytes(_decode_key_bytes(str(raw)))
+    return out
+
+
+def export_public_verification_keys() -> list[dict[str, str]]:
+    """Public Ed25519 keys for verifying trucert_sig in IPFS metadata (no secrets)."""
+    if not Config.TRUCERT_SIG_PUBLIC_KEYS:
+        return []
+    raw_map = json.loads(Config.TRUCERT_SIG_PUBLIC_KEYS)
+    out: list[dict[str, str]] = []
+    for kid, raw in raw_map.items():
+        try:
+            pk = Ed25519PublicKey.from_public_bytes(_decode_key_bytes(str(raw)))
+            raw_bytes = pk.public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+            out.append(
+                {
+                    "kid": str(kid),
+                    "public_key_base64": base64.b64encode(raw_bytes).decode("ascii"),
+                    "public_key_hex": "0x" + raw_bytes.hex(),
+                }
+            )
+        except Exception:
+            out.append({"kid": str(kid), "public_key_base64": "", "public_key_hex": ""})
     return out
 
 

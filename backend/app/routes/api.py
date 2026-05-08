@@ -6,6 +6,8 @@ import io
 import json
 import os
 import re
+import time
+import uuid
 from typing import Any
 from urllib.parse import urlparse
 
@@ -16,12 +18,30 @@ from web3 import Web3
 
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintBatch, MintBatchRow, University, User
-from app.services import blockchain_service, metadata_signing, pinata_service
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    Notification,
+    University,
+    User,
+)
+from app.services import (
+    blockchain_service,
+    eip712_service,
+    gemini_service,
+    metadata_signing,
+    notification_service,
+    pinata_service,
+    risk_hints_service,
+)
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 DEFAULT_IMAGE_CID = "bafybeihehkjcmyzvdldixinxrr3k5jj37tolozwkh3q6bw2q24rzt2o2mi"
 ACTION_VALUES = {"issued", "transferred", "revoked", "burned", "reissued"}
+GEMINI_TEST_MAX_PROMPT_CHARS = 2000
 
 
 def _require_roles(*roles: str) -> None:
@@ -46,6 +66,25 @@ def _current_user() -> User:
 
         abort(401)
     return user
+
+
+def _parse_int_qs(v: str | None, default: int, *, lo: int, hi: int) -> int:
+    try:
+        n = int(str(v).strip())
+    except Exception:
+        return default
+    return max(lo, min(hi, n))
+
+
+def _parse_bool_qs(v: str | None, default: bool) -> bool:
+    if v is None:
+        return default
+    t = str(v).strip().lower()
+    if t in {"1", "true", "yes", "y", "on"}:
+        return True
+    if t in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
 
 
 def _ipfs_uri_to_http(uri: str) -> str:
@@ -266,16 +305,24 @@ def list_universities():
 def approve_university(uni_id: int):
     _require_roles("admin")
     uni = University.query.get_or_404(uni_id)
-    if uni.status == "verified":
-        return jsonify({"message": "Already verified"}), 200
-
+    was_verified = uni.status == "verified"
     w3 = blockchain_service.get_w3()
     contract = blockchain_service.get_contract(w3)
     tx = blockchain_service.set_issuer_whitelisted(w3, contract, uni.wallet_address, True)
 
     uni.status = "verified"
+    notification_service.notify_university_users(
+        uni.id,
+        kind="university_approved",
+        title="University approved",
+        body="Your institution was approved and the issuer wallet was whitelisted on-chain.",
+        payload={"university_id": int(uni.id), "tx_hash": (tx.get("tx_hash") if isinstance(tx, dict) else None)},
+    )
     db.session.commit()
-    return jsonify({"message": "University verified and issuer whitelisted on-chain", "tx": tx})
+    msg = "University verified and issuer whitelisted on-chain"
+    if was_verified:
+        msg = "Issuer whitelisted on-chain (status already verified)"
+    return jsonify({"message": msg, "tx": tx})
 
 
 @bp.post("/admin/universities/<int:uni_id>/reject")
@@ -284,8 +331,43 @@ def reject_university(uni_id: int):
     _require_roles("admin")
     uni = University.query.get_or_404(uni_id)
     uni.status = "rejected"
+    notification_service.notify_university_users(
+        uni.id,
+        kind="university_rejected",
+        title="University registration rejected",
+        body="Your institution registration was rejected by an admin. Contact support or re-apply if needed.",
+        payload={"university_id": int(uni.id)},
+    )
     db.session.commit()
     return jsonify({"message": "University registration rejected"})
+
+
+@bp.post("/admin/ai/gemini-test")
+@jwt_required()
+def admin_gemini_test():
+    """Admin-only smoke test for Gemini; does not send certificate or student data."""
+    _require_roles("admin")
+    data = request.get_json(silent=True) or {}
+    prompt = (data.get("prompt") or "").strip()
+    if not prompt:
+        return jsonify({"error": "prompt is required"}), 400
+    if len(prompt) > GEMINI_TEST_MAX_PROMPT_CHARS:
+        return jsonify(
+            {"error": f"prompt must be at most {GEMINI_TEST_MAX_PROMPT_CHARS} characters"}
+        ), 400
+
+    if not gemini_service.is_configured():
+        return jsonify({"error": "Gemini not configured"}), 503
+
+    model = (Config.GEMINI_MODEL or "gemini-1.5-flash").strip()
+    try:
+        text = gemini_service.generate_text(prompt)
+    except gemini_service.GeminiNotConfiguredError:
+        return jsonify({"error": "Gemini not configured"}), 503
+    except gemini_service.GeminiError as e:
+        return jsonify({"error": str(e)}), 503
+
+    return jsonify({"model": model, "text": text})
 
 
 @bp.get("/university/me")
@@ -301,6 +383,17 @@ def university_me():
         chain_id = int(blockchain_service.get_w3().eth.chain_id)
     except Exception:
         pass
+    eip712_domain: dict[str, Any] | None = None
+    try:
+        eip712_domain = {
+            "name": Config.EIP712_DOMAIN_NAME,
+            "version": Config.EIP712_DOMAIN_VERSION,
+            "chainId": int(Config.EIP712_CHAIN_ID),
+            "verifyingContract": eip712_service.get_verifying_contract_checksum(),
+        }
+    except Exception:
+        eip712_domain = None
+
     return jsonify(
         {
             "name": uni.name,
@@ -309,6 +402,8 @@ def university_me():
             "wallet_address": uni.wallet_address,
             "contract_address": Config.TRUCERT_CONTRACT_ADDRESS,
             "chain_id": chain_id,
+            "eip712_nonce": int(uni.eip712_nonce or 0),
+            "eip712_domain": eip712_domain,
             "logo_uri": uni.logo_uri,
             "logo_url": _ipfs_uri_to_gateway(uni.logo_uri or ""),
             "institution_contact_email": uni.institution_contact_email,
@@ -481,6 +576,30 @@ def prepare_mint_certificate():
     rec.cert_id = metadata["cert_id"]
     rec.core_hash = core_hash
     rec.status = "prepared"
+    commitment = eip712_service.single_mint_commitment(metadata["cert_id"], core_hash)
+    mint_request_id = str(uuid.uuid4())
+    nonce = int(uni.eip712_nonce or 0)
+    expiry = eip712_service.default_expiry_unix()
+    eip712 = eip712_service.mint_authorization_full_message(
+        issuer_address=uni.wallet_address,
+        commitment=commitment,
+        nonce=nonce,
+        expiry_unix=expiry,
+    )
+    db.session.add(
+        MintAuthorizationRequest(
+            id=mint_request_id,
+            university_id=uni.id,
+            cert_id=metadata["cert_id"],
+            core_hash=core_hash,
+            metadata_uri=ipfs_uri,
+            expected_token_id=next_token_id,
+            commitment_hex=Web3.to_hex(commitment),
+            nonce_snapshot=nonce,
+            expiry_unix=expiry,
+            status="pending",
+        )
+    )
     db.session.commit()
 
     return jsonify(
@@ -490,6 +609,294 @@ def prepare_mint_certificate():
             "cert_id": metadata["cert_id"],
             "next_token_id_hint": next_token_id,
             "institution_name": metadata["institution_name"],
+            "mint_request_id": mint_request_id,
+            "eip712": eip712,
+            "commitment": Web3.to_hex(commitment),
+            "nonce": nonce,
+            "expiry_unix": expiry,
+        }
+    )
+
+
+@bp.post("/university/certificates/submit-authorization")
+@jwt_required()
+def submit_mint_authorization():
+    """Verify EIP-712 mint authorization and submit mintForIssuer with platform minter key."""
+    _require_roles("university")
+    user = _current_user()
+    uni = user.university
+    if not uni or uni.status != "verified":
+        return jsonify({"error": "University is not verified"}), 403
+
+    body = request.get_json(silent=True) or {}
+    mint_request_id = (body.get("mint_request_id") or "").strip()
+    signature = (body.get("signature") or "").strip()
+    if not mint_request_id or not signature:
+        return jsonify({"error": "mint_request_id and signature are required"}), 400
+
+    req = db.session.get(MintAuthorizationRequest, mint_request_id)
+    if not req or req.university_id != uni.id:
+        return jsonify({"error": "Mint request not found"}), 404
+    if req.status != "pending":
+        return jsonify({"error": f"Mint request already {req.status}"}), 409
+
+    if int(time.time()) > int(req.expiry_unix):
+        req.status = "failed"
+        req.failure_code = "expired"
+        db.session.commit()
+        return jsonify({"error": "Authorization expired; prepare mint again."}), 400
+
+    if int(uni.eip712_nonce or 0) != int(req.nonce_snapshot):
+        req.status = "failed"
+        req.failure_code = "nonce_mismatch"
+        db.session.commit()
+        return jsonify({"error": "Nonce mismatch; prepare a new mint request."}), 409
+
+    ch = (req.commitment_hex or "").strip()
+    if ch.startswith("0x"):
+        ch = ch[2:]
+    commitment_bytes = bytes.fromhex(ch)
+    full = eip712_service.mint_authorization_full_message(
+        issuer_address=uni.wallet_address,
+        commitment=commitment_bytes,
+        nonce=int(req.nonce_snapshot),
+        expiry_unix=int(req.expiry_unix),
+    )
+    try:
+        signer = eip712_service.recover_typed_data_signer(full, signature)
+    except Exception as e:
+        req.status = "failed"
+        req.failure_code = "invalid_signature"
+        db.session.commit()
+        return jsonify({"error": f"Invalid signature: {e!s}"}), 400
+    if signer.lower() != Web3.to_checksum_address(uni.wallet_address).lower():
+        req.status = "failed"
+        req.failure_code = "wrong_signer"
+        db.session.commit()
+        return jsonify({"error": "Signature signer does not match university wallet"}), 403
+
+    try:
+        w3 = blockchain_service.get_w3()
+        cfg_err = _require_contract_code(w3)
+        if cfg_err:
+            return jsonify({"error": cfg_err}), 503
+        contract = blockchain_service.get_contract(w3)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+    # Preflight: ensure the deployed contract supports platform minting and is configured with our minter.
+    if not hasattr(contract.functions, "mintForIssuer"):
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "Configured contract ABI does not expose mintForIssuer. "
+                        "You may be pointing at an older TruCert deployment; redeploy and update TRUCERT_CONTRACT_ADDRESS."
+                    )
+                }
+            ),
+            503,
+        )
+    try:
+        expected_minter = blockchain_service.minter_account_address()
+    except Exception as e:
+        return jsonify({"error": f"Platform minter key not configured: {e!s}"}), 503
+    try:
+        onchain_minter = contract.functions.minter().call()
+    except Exception:
+        onchain_minter = None
+    if not onchain_minter or Web3.to_checksum_address(onchain_minter).lower() != Web3.to_checksum_address(expected_minter).lower():
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "Contract minter is not set to this backend's platform minter address. "
+                        f"On-chain minter: {onchain_minter or 'unset'}; backend minter: {expected_minter}. "
+                        "As contract owner, call setMinter(<backend minter address>) on the deployed TruCert contract."
+                    )
+                }
+            ),
+            409,
+        )
+
+    try:
+        if not contract.functions.whitelistedIssuers(Web3.to_checksum_address(uni.wallet_address)).call():
+            return jsonify({"error": "Issuer wallet is not whitelisted on-chain"}), 403
+    except Exception as e:
+        return jsonify({"error": f"Whitelist read failed: {e!s}"}), 502
+
+    digest = eip712_service.typed_data_signable_hash_hex(full)
+
+    try:
+        token_id, tx_hex = blockchain_service.mint_for_issuer(
+            w3,
+            contract,
+            uni.wallet_address,
+            req.metadata_uri,
+            req.core_hash,
+            req.cert_id,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Mint transaction failed: {e!s}"}), 502
+
+    # Token ids are sequential; other mints can interleave between prepare and submit.
+    # The authorization commitment does not include token_id, so accept the minted token id and reconcile the DB index.
+    token_id_int = int(token_id)
+    rec = CertificateRecord.query.filter_by(cert_id=req.cert_id).first()
+    if not rec:
+        existing = CertificateRecord.query.filter_by(token_id=token_id_int).first()
+        if existing:
+            if (existing.status or "").lower() == "prepared":
+                db.session.delete(existing)
+                db.session.flush()
+            else:
+                other_tid = blockchain_service.find_minted_token_id_by_cert_id(
+                    w3,
+                    contract,
+                    issuer=uni.wallet_address,
+                    cert_id=str(existing.cert_id or "").strip(),
+                )
+                if other_tid and int(other_tid) != token_id_int:
+                    if CertificateRecord.query.filter_by(token_id=int(other_tid)).first() is None:
+                        existing.token_id = int(other_tid)
+                        db.session.flush()
+                        existing = None
+                if existing:
+                    return (
+                        jsonify(
+                            {
+                                "error": (
+                                    "Certificate index collision on token_id; another certificate record already "
+                                    "claims this token id. Resolve in DB or rebuild the index."
+                                ),
+                                "collision": {
+                                    "token_id": token_id_int,
+                                    "existing_cert_id": existing.cert_id,
+                                    "existing_status": existing.status,
+                                },
+                            }
+                        ),
+                        500,
+                    )
+        rec = CertificateRecord(
+            token_id=token_id_int,
+            university_id=uni.id,
+            cert_id=req.cert_id,
+            ipfs_uri=req.metadata_uri,
+            core_hash=req.core_hash,
+            status="issued",
+        )
+        db.session.add(rec)
+    else:
+        other_tid = CertificateRecord.query.filter_by(token_id=token_id_int).first()
+        if other_tid and other_tid.id != rec.id:
+            # Auto-resolve stale reservations: if the other record was only "prepared", it never minted on-chain.
+            if (other_tid.status or "").lower() == "prepared":
+                db.session.delete(other_tid)
+                db.session.flush()
+            else:
+                other_chain = blockchain_service.find_minted_token_id_by_cert_id(
+                    w3,
+                    contract,
+                    issuer=uni.wallet_address,
+                    cert_id=str(other_tid.cert_id or "").strip(),
+                )
+                if other_chain and int(other_chain) != token_id_int:
+                    if CertificateRecord.query.filter_by(token_id=int(other_chain)).first() is None:
+                        other_tid.token_id = int(other_chain)
+                        db.session.flush()
+                        other_tid = None
+                if other_tid and other_tid.id != rec.id:
+                    return (
+                        jsonify(
+                            {
+                                "error": (
+                                    "Certificate index collision on token_id; another certificate record already "
+                                    "claims this token id. Resolve in DB or rebuild the index."
+                                ),
+                                "collision": {
+                                    "token_id": token_id_int,
+                                    "existing_cert_id": other_tid.cert_id,
+                                    "existing_status": other_tid.status,
+                                },
+                            }
+                        ),
+                        500,
+                    )
+        rec.token_id = token_id_int
+        rec.ipfs_uri = req.metadata_uri
+        rec.core_hash = req.core_hash
+        rec.status = "issued"
+    req.status = "minted"
+    req.failure_code = None
+    req.signature_hex = signature
+    req.digest_hex = digest
+    req.minter_tx_hash = tx_hex
+    uni.eip712_nonce = int(uni.eip712_nonce or 0) + 1
+
+    h = (tx_hex or "").strip()
+    if not h.startswith("0x"):
+        h = "0x" + h
+    try:
+        receipt = w3.eth.get_transaction_receipt(h)
+        processed = contract.events.CertificateMinted().process_receipt(receipt)
+        block_dt = datetime.now(timezone.utc)
+        try:
+            blk = w3.eth.get_block(int(receipt["blockNumber"]))
+            block_dt = datetime.fromtimestamp(int(blk["timestamp"]), tz=timezone.utc)
+        except Exception:
+            pass
+        for lg in processed:
+            args = lg["args"]
+            if str(args.get("certId", "")).strip() != str(req.cert_id).strip():
+                continue
+            _li = lg.get("logIndex", lg.get("log_index", 0))
+            log_index = int(_li) if _li is not None else 0
+            existing = ActivityLog.query.filter_by(tx_hash=h, log_index=log_index).first()
+            if not existing:
+                db.session.add(
+                    ActivityLog(
+                        university_id=uni.id,
+                        token_id=int(token_id),
+                        action="issued",
+                        tx_hash=h,
+                        log_index=log_index,
+                        block_number=int(receipt["blockNumber"]),
+                        block_timestamp=block_dt,
+                        actor=blockchain_service.minter_account_address(),
+                        details_json=json.dumps(
+                            {
+                                "metadata_uri": req.metadata_uri,
+                                "cert_id": req.cert_id,
+                                "mint_request_id": mint_request_id,
+                                "commitment": req.commitment_hex,
+                                "nonce": req.nonce_snapshot,
+                                "eip712_digest": digest,
+                                "minter_tx_hash": h,
+                                "platform_mint": True,
+                            }
+                        ),
+                        created_at=block_dt,
+                    )
+                )
+            break
+    except Exception:
+        pass
+
+    notification_service.notify_university_users(
+        uni.id,
+        kind="mint_success",
+        title="Certificate minted successfully",
+        body=f"Certificate {req.cert_id} minted on-chain as token #{int(token_id)}.",
+        payload={"token_id": int(token_id), "cert_id": req.cert_id, "tx_hash": tx_hex},
+    )
+    db.session.commit()
+    return jsonify(
+        {
+            "token_id": int(token_id),
+            "tx_hash": tx_hex,
+            "mint_request_id": mint_request_id,
+            "eip712_digest": digest,
         }
     )
 
@@ -1090,6 +1497,373 @@ def verify_by_fields():
                 "core_hash": onchain.get("core_hash"),
             },
             "off_chain_metadata": offchain,
+        }
+    )
+
+
+def _sanitize_verify_explain_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Keep only non-sensitive fields already exposed by public verification responses.
+    Drop anything that looks like email/internal identifiers or signature blobs.
+    """
+    on_chain_in = payload.get("on_chain") if isinstance(payload.get("on_chain"), dict) else {}
+    meta_in = payload.get("off_chain_metadata") if isinstance(payload.get("off_chain_metadata"), dict) else {}
+
+    # Only keep metadata fields that are already displayed in the public verify UI and avoid emails.
+    allowed_meta_keys = {
+        "student_full_name",
+        "degree_title",
+        "issue_date",
+        "cert_id",
+        "institution_name",
+        "institution_contact_phone",
+        "institution_website",
+        "institution_license_id",
+        "institution_license_authority",
+        "institution_license_valid_until",
+        "format",
+        "name",
+        "description",
+        "verification_method",
+    }
+
+    meta_out: dict[str, Any] = {}
+    for k, v in meta_in.items():
+        kk = str(k)
+        low = kk.lower()
+        if kk in allowed_meta_keys:
+            meta_out[kk] = v
+            continue
+        if low.endswith("email") or "email" in low:
+            continue
+        if "internal_id" in low or low.endswith("_id") and "cert_id" not in low:
+            continue
+        if low in {"trucert_sig", "trucert_sig_v", "trucert_sig_kid", "trucert_sig_alg"}:
+            continue
+
+    sig = meta_in.get("_signature") if isinstance(meta_in.get("_signature"), dict) else None
+    if sig:
+        meta_out["_signature"] = {
+            "ok": bool(sig.get("ok")) if "ok" in sig else None,
+            "reason": sig.get("reason"),
+        }
+
+    on_chain_out = {
+        "exists": on_chain_in.get("exists"),
+        "issuer_address": on_chain_in.get("issuer_address"),
+        "owner_address": on_chain_in.get("owner_address"),
+        "valid": on_chain_in.get("valid"),
+        "locked": on_chain_in.get("locked"),
+        "metadata_uri": on_chain_in.get("metadata_uri"),
+        "core_hash": on_chain_in.get("core_hash"),
+    }
+
+    # `exists` is used by /verify/<token_id>; `matched` is used by /verify/fields.
+    return {
+        "token_id": payload.get("token_id"),
+        "exists": payload.get("exists"),
+        "matched": payload.get("matched"),
+        "chain_id": payload.get("chain_id"),
+        "contract_address": payload.get("contract_address"),
+        "on_chain": on_chain_out,
+        "off_chain_metadata": meta_out,
+    }
+
+
+@bp.post("/verify/explain")
+def verify_explain():
+    """
+    Optional AI explainer for public verification payloads.
+    Advisory only: never treated as proof of authenticity.
+    """
+    if not gemini_service.is_configured():
+        return jsonify({"error": "Gemini not configured"}), 503
+
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    # Accept either {verification: {...}} or a raw verification response object.
+    payload = data.get("verification") if isinstance(data.get("verification"), dict) else data
+    if not isinstance(payload, dict):
+        return jsonify({"error": "verification payload is required"}), 400
+
+    token_id = payload.get("token_id")
+    if token_id is None:
+        return jsonify({"error": "token_id is required"}), 400
+
+    sanitized = _sanitize_verify_explain_payload(payload)
+
+    system_instruction = (
+        "You are an assistant helping a verifier understand a blockchain certificate verification result. "
+        "Write a short plain-language summary (3-6 sentences). "
+        "Be precise and cautious. Never claim cryptographic proof. "
+        "Explicitly state that this explanation is advisory and that on-chain data and signed metadata are authoritative. "
+        "Do not request or infer personal data beyond the provided fields. "
+        "If any fields are missing or errors are present, say what could not be checked."
+    )
+
+    prompt = (
+        "Explain this certificate verification payload in plain English. "
+        "Highlight: whether token exists/matched, issuer/owner addresses, "
+        "valid/revoked status, locked/soulbound status, and whether off-chain metadata signature checked ok.\n\n"
+        f"Verification payload (sanitized):\n{json.dumps(sanitized, ensure_ascii=False)}"
+    )
+
+    try:
+        text = gemini_service.generate_text(prompt, system_instruction=system_instruction)
+    except gemini_service.GeminiNotConfiguredError:
+        return jsonify({"error": "Gemini not configured"}), 503
+    except gemini_service.GeminiError as e:
+        return jsonify({"error": str(e)}), 503
+
+    return jsonify({"model": (Config.GEMINI_MODEL or "gemini-1.5-flash").strip(), "text": text})
+
+
+def _risk_hints_payload(
+    *,
+    university_id: int,
+    include_ai_summary: bool,
+    current_days: int,
+    reference_days: int,
+) -> tuple[dict[str, Any], int]:
+    as_of = datetime.now(timezone.utc)
+    metrics = risk_hints_service.compute_metrics(
+        university_id,
+        as_of=as_of,
+        current_days=current_days,
+        reference_days=reference_days,
+    )
+    flags = risk_hints_service.compute_flags(metrics)
+    summary = risk_hints_service.summarize_severity(flags)
+
+    out: dict[str, Any] = {
+        "disclaimer": (
+            "Risk hints are operational signals only (not proof). "
+            "Certificate validity remains determined by on-chain state and signed metadata."
+        ),
+        "computed_at": metrics.get("computed_at"),
+        "windows": metrics.get("windows"),
+        "metrics": metrics,
+        "flags": flags,
+        "summary": summary,
+    }
+
+    if not include_ai_summary:
+        return out, 200
+
+    # IMPORTANT: AI must not take enforcement actions. Narrative is optional and derived from flags/aggregates only.
+    if not gemini_service.is_configured():
+        out["ai_summary_text"] = None
+        out["ai_summary_reason"] = "Gemini not configured"
+        return out, 200
+
+    system_instruction = (
+        "You are an assistant helping operations staff interpret risk hint flags for a university dashboard. "
+        "Explain what the flags mean in plain language (4-7 sentences), using cautious, non-accusatory wording. "
+        "Do not claim fraud, illegality, or proof. "
+        "Do not request or infer personal data. "
+        "Suggest 2-4 practical human checks (e.g., review recent mint logs, confirm issuer wallet, check RPC health). "
+        "You must not recommend automatic enforcement; this is advisory only."
+    )
+
+    ai_payload = {
+        "summary": summary,
+        "flags": [{"code": f.get("code"), "severity": f.get("severity"), "detail": f.get("detail")} for f in flags],
+        "aggregates": {
+            "mint_velocity": metrics.get("mint_velocity"),
+            "revoke": metrics.get("revoke"),
+            "single_mint_auth": metrics.get("single_mint_auth"),
+            "batch": metrics.get("batch"),
+        },
+        "windows": metrics.get("windows"),
+    }
+    prompt = (
+        "Write a brief operational summary of these risk hints. "
+        "Focus on what changed, why it might happen benignly, and what to check next.\n\n"
+        + json.dumps(ai_payload, ensure_ascii=False)
+    )
+
+    try:
+        out["ai_summary_text"] = gemini_service.generate_text(prompt, system_instruction=system_instruction)
+        out["ai_summary_reason"] = None
+    except gemini_service.GeminiNotConfiguredError:
+        out["ai_summary_text"] = None
+        out["ai_summary_reason"] = "Gemini not configured"
+    except gemini_service.GeminiError as e:
+        out["ai_summary_text"] = None
+        out["ai_summary_reason"] = str(e)
+
+    return out, 200
+
+
+@bp.get("/university/risk-hints")
+@jwt_required()
+def university_risk_hints():
+    _require_roles("university")
+    user = _current_user()
+    uni = user.university
+    if not uni:
+        return jsonify({"error": "No university profile"}), 400
+
+    current_days = _parse_int_qs(request.args.get("current_days"), 7, lo=1, hi=30)
+    reference_days = _parse_int_qs(request.args.get("reference_days"), 90, lo=14, hi=365)
+    include_default = gemini_service.is_configured()
+    include_ai = _parse_bool_qs(request.args.get("include_ai_summary"), include_default)
+
+    payload, status = _risk_hints_payload(
+        university_id=int(uni.id),
+        include_ai_summary=include_ai,
+        current_days=current_days,
+        reference_days=reference_days,
+    )
+    return jsonify(payload), status
+
+
+@bp.get("/admin/universities/<int:uni_id>/risk-hints")
+@jwt_required()
+def admin_university_risk_hints(uni_id: int):
+    _require_roles("admin")
+    current_days = _parse_int_qs(request.args.get("current_days"), 7, lo=1, hi=30)
+    reference_days = _parse_int_qs(request.args.get("reference_days"), 90, lo=14, hi=365)
+    include_default = gemini_service.is_configured()
+    include_ai = _parse_bool_qs(request.args.get("include_ai_summary"), include_default)
+
+    payload, status = _risk_hints_payload(
+        university_id=int(uni_id),
+        include_ai_summary=include_ai,
+        current_days=current_days,
+        reference_days=reference_days,
+    )
+    return jsonify(payload), status
+
+
+@bp.get("/notifications")
+@jwt_required()
+def list_notifications():
+    user = _current_user()
+    limit = _parse_int_qs(request.args.get("limit"), 30, lo=1, hi=200)
+    offset = _parse_int_qs(request.args.get("offset"), 0, lo=0, hi=1000000)
+    unread_only = _parse_bool_qs(request.args.get("unread_only"), False)
+
+    q = Notification.query.filter_by(user_id=int(user.id))
+    if unread_only:
+        q = q.filter(Notification.read_at.is_(None))
+    rows = q.order_by(Notification.created_at.desc()).offset(offset).limit(limit).all()
+
+    unread_count = int(Notification.query.filter_by(user_id=int(user.id), read_at=None).count())
+
+    def _row(n: Notification) -> dict[str, Any]:
+        payload = None
+        if (n.payload_json or "").strip():
+            try:
+                payload = json.loads(n.payload_json)
+            except Exception:
+                payload = None
+        return {
+            "id": int(n.id),
+            "kind": n.kind,
+            "title": n.title,
+            "body": n.body,
+            "payload": payload,
+            "read_at": n.read_at.isoformat() if n.read_at else None,
+            "created_at": n.created_at.isoformat() if n.created_at else None,
+        }
+
+    return jsonify({"notifications": [_row(n) for n in rows], "unread_count": unread_count})
+
+
+@bp.post("/notifications/<int:notif_id>/read")
+@jwt_required()
+def mark_notification_read(notif_id: int):
+    user = _current_user()
+    n = Notification.query.filter_by(id=int(notif_id), user_id=int(user.id)).first()
+    if not n:
+        return jsonify({"error": "Not found"}), 404
+    if not n.read_at:
+        n.read_at = datetime.utcnow()
+        db.session.commit()
+    unread_count = int(Notification.query.filter_by(user_id=int(user.id), read_at=None).count())
+    return jsonify({"ok": True, "unread_count": unread_count})
+
+
+@bp.post("/notifications/read-all")
+@jwt_required()
+def mark_notifications_read_all():
+    user = _current_user()
+    updated = notification_service.mark_all_read(int(user.id))
+    db.session.commit()
+    return jsonify({"ok": True, "updated": int(updated), "unread_count": 0})
+
+
+@bp.get("/public/config")
+def public_trust_config():
+    """Non-secret trust fields for marketing / verification transparency (no JWT)."""
+    chain_id = 80002
+    try:
+        w3 = blockchain_service.get_w3()
+        chain_id = int(w3.eth.chain_id)
+    except Exception:
+        pass
+    addr = (Config.TRUCERT_CONTRACT_ADDRESS or "").strip()
+    checksum = ""
+    explorer = ""
+    if addr:
+        try:
+            checksum = Web3.to_checksum_address(addr)
+            explorer = f"https://amoy.polygonscan.com/address/{checksum}"
+        except Exception:
+            checksum = addr
+    keys: list[dict[str, str]] = []
+    try:
+        keys = metadata_signing.export_public_verification_keys()
+    except Exception:
+        keys = []
+    minter_addr = None
+    try:
+        if (Config.TRUCERT_MINTER_PRIVATE_KEY or "").strip():
+            minter_addr = blockchain_service.minter_account_address()
+    except Exception:
+        minter_addr = None
+    return jsonify(
+        {
+            "chain_id": chain_id,
+            "network_name": "Polygon Amoy",
+            "contract_address": checksum or None,
+            "contract_explorer_url": explorer or None,
+            "platform_minter_address": minter_addr,
+            "pinata_gateway_base": Config.PINATA_GATEWAY_BASE.rstrip("/"),
+            "active_signing_kid": (Config.TRUCERT_SIG_KID or "").strip() or None,
+            "trucert_public_keys": keys,
+            "eip712_domain": {
+                "name": Config.EIP712_DOMAIN_NAME,
+                "version": Config.EIP712_DOMAIN_VERSION,
+                "chainId": int(Config.EIP712_CHAIN_ID),
+                "verifyingContract": checksum or None,
+            },
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+
+@bp.get("/public/verified-universities")
+def public_verified_universities():
+    """Verified issuers only (no pending registrations)."""
+    rows = (
+        University.query.filter_by(status="verified")
+        .order_by(University.name.asc())
+        .all()
+    )
+    return jsonify(
+        {
+            "universities": [
+                {
+                    "name": u.name,
+                    "internal_id": u.internal_id,
+                    "logo_url": _ipfs_uri_to_gateway(u.logo_uri) if u.logo_uri else None,
+                }
+                for u in rows
+            ]
         }
     )
 
