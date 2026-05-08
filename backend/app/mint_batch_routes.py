@@ -18,7 +18,16 @@ from werkzeug.utils import secure_filename
 from app.config import Config
 from app.extensions import db
 from app.models import ActivityLog, CertificateRecord, MintBatch, MintBatchRow, University, User
-from app.services import blockchain_service, eip712_service, metadata_signing, notification_service, pinata_service
+from app.services import (
+    blockchain_service,
+    eip712_service,
+    gemini_service,
+    metadata_signing,
+    notification_service,
+    pinata_service,
+)
+
+BATCH_ROW_AI_MAX_QUESTION_CHARS = 500
 
 # Late-bound to avoid circular import: set by register_mint_batch_routes
 _api_bp: Blueprint | None = None
@@ -117,6 +126,30 @@ def _build_metadata_for_batch_row(row: MintBatchRow, uni: University) -> dict[st
         "image": (row.image_ipfs_uri or "").strip() or None,
     }
     return api_mod._build_metadata(data, uni, skip_cert_id_uniqueness=False)
+
+
+def _sanitize_batch_row_for_ai(row: MintBatchRow) -> dict[str, Any]:
+    """Fields safe to send to an LLM: no email, internal IDs, raw CSV/JSON lines, or secrets."""
+    ve: Any = row.validation_errors
+    if ve:
+        try:
+            ve = json.loads(ve) if isinstance(ve, str) else ve
+        except Exception:
+            ve = str(ve)[:800]
+    return {
+        "row_index": row.row_index,
+        "cert_id": row.cert_id,
+        "student_full_name": row.student_full_name,
+        "degree_title": row.degree_title,
+        "issue_date": row.issue_date,
+        "row_status": row.row_status,
+        "validation_errors": ve,
+        "has_metadata_uri": bool((row.metadata_uri or "").strip()),
+        "has_core_hash": bool((row.core_hash or "").strip()),
+        "token_id": row.token_id,
+        "error_message": ((row.error_message or "")[:500] or None),
+        "image_ipfs_uri_present": bool((row.image_ipfs_uri or "").strip()),
+    }
 
 
 def _serialize_row(r: MintBatchRow) -> dict[str, Any]:
@@ -1150,3 +1183,57 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             mimetype="text/csv",
             headers={"Content-Disposition": f"attachment; filename=batch-{batch_id}-errors.csv"},
         )
+
+    @bp.post("/university/mint-batches/<int:batch_id>/rows/<int:row_id>/ai-qa")
+    @jwt_required()
+    def batch_row_ai_qa(batch_id: int, row_id: int):
+        """Advisory consistency check for one batch row; omits email/internal IDs from the model payload."""
+        _require_roles("university")
+        user = _current_user()
+        uni = user.university
+        if not uni or uni.status != "verified":
+            return jsonify({"error": "University is not verified"}), 403
+        b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
+        if not b:
+            return jsonify({"error": "Batch not found"}), 404
+        row = MintBatchRow.query.filter_by(id=row_id, batch_id=batch_id).first()
+        if not row:
+            return jsonify({"error": "Row not found"}), 404
+
+        body = request.get_json(silent=True) or {}
+        question = (body.get("question") or "").strip()
+        if len(question) > BATCH_ROW_AI_MAX_QUESTION_CHARS:
+            return jsonify(
+                {"error": f"question must be at most {BATCH_ROW_AI_MAX_QUESTION_CHARS} characters"}
+            ), 400
+
+        if not gemini_service.is_configured():
+            return jsonify({"error": "Gemini not configured"}), 503
+
+        snapshot = {
+            "institution": {"name": uni.name},
+            "batch_id": batch_id,
+            "row": _sanitize_batch_row_for_ai(row),
+        }
+
+        system_instruction = (
+            "You help university staff sanity-check one CSV batch row before TruCert minting. "
+            "Comment on internal consistency: date format (YYYY-MM-DD), cert_id style, whether name/degree/issue "
+            "date look plausible together, and whether row_status matches preparation (e.g. prepared vs pending_validation). "
+            "If validation_errors are present, explain them in plain language. "
+            "Advisory only: issuer systems and TruCert server validation are authoritative. "
+            "Never ask for or infer student email or internal student IDs — those were not provided on purpose. "
+            "Answer in under 180 words, plain text, no markdown headings or bullet lists."
+        )
+        prompt = "Review this batch row snapshot.\n" + json.dumps(snapshot, ensure_ascii=False)
+        if question:
+            prompt += f"\n\nIssuer question: {question}"
+
+        try:
+            text = gemini_service.generate_text(prompt, system_instruction=system_instruction)
+        except gemini_service.GeminiNotConfiguredError:
+            return jsonify({"error": "Gemini not configured"}), 503
+        except gemini_service.GeminiError as e:
+            return jsonify({"error": str(e)}), 503
+
+        return jsonify({"model": (Config.GEMINI_MODEL or "gemini-1.5-flash").strip(), "text": text})

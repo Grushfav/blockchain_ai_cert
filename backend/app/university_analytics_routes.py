@@ -12,7 +12,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy import func
 
 from app.extensions import db
-from app.models import ActivityLog, MintBatch, MintBatchRow, University, User
+from app.models import ActivityLog, MintAuthorizationRequest, MintBatch, MintBatchRow, University, User
 from app.services import analytics_service
 
 _api_bp: Blueprint | None = None
@@ -121,6 +121,55 @@ def register_university_analytics_routes(bp: Blueprint) -> None:
                 }
             )
         return jsonify({"events": out})
+
+    @bp.get("/university/hub-pending-counts")
+    @jwt_required()
+    def university_hub_pending_counts():
+        """
+        Compact counts for the institution overview hub.
+
+        Latest batch rule: the row with the greatest MintBatch.id for this university_id (same ordering as
+        GET /university/analytics/batches). This matches newest-first batch list; created_at is not used
+        so IDs remain stable if backfilled.
+
+        Row semantics align with portal batch signing:
+        - rows_awaiting_preparation: rows not in terminal success/invalid states and not yet `prepared`.
+        - mint_failed_rows: rows with row_status == mint_failed on that latest batch only.
+        """
+        _, uni_id = _require_university()
+        pending_eip712 = int(
+            MintAuthorizationRequest.query.filter_by(university_id=uni_id, status="pending").count()
+        )
+
+        latest = MintBatch.query.filter_by(university_id=uni_id).order_by(MintBatch.id.desc()).first()
+        if not latest:
+            return jsonify(
+                {
+                    "latest_batch_id": None,
+                    "rows_awaiting_preparation": 0,
+                    "mint_failed_rows": 0,
+                    "pending_single_mint_eip712": pending_eip712,
+                }
+            )
+
+        bid = int(latest.id)
+        terminal = ("invalid", "mint_confirmed", "email_sent", "email_failed")
+        awaiting = (
+            MintBatchRow.query.filter_by(batch_id=bid)
+            .filter(~MintBatchRow.row_status.in_(terminal))
+            .filter(MintBatchRow.row_status != "prepared")
+            .count()
+        )
+        mint_failed = int(MintBatchRow.query.filter_by(batch_id=bid, row_status="mint_failed").count())
+
+        return jsonify(
+            {
+                "latest_batch_id": bid,
+                "rows_awaiting_preparation": int(awaiting),
+                "mint_failed_rows": mint_failed,
+                "pending_single_mint_eip712": pending_eip712,
+            }
+        )
 
     @bp.get("/university/analytics/batches")
     @jwt_required()

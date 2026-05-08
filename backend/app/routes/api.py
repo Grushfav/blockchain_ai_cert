@@ -1595,19 +1595,23 @@ def verify_explain():
     sanitized = _sanitize_verify_explain_payload(payload)
 
     system_instruction = (
-        "You are an assistant helping a verifier understand a blockchain certificate verification result. "
-        "Write a short plain-language summary (3-6 sentences). "
-        "Be precise and cautious. Never claim cryptographic proof. "
-        "Explicitly state that this explanation is advisory and that on-chain data and signed metadata are authoritative. "
-        "Do not request or infer personal data beyond the provided fields. "
-        "If any fields are missing or errors are present, say what could not be checked."
+        "You help employers and the public read a TruCert verification result. "
+        "Output must be exactly two paragraphs separated by one blank line (no markdown, no bullets, no headings). "
+        "Paragraph 1 — credential narrative: in plain English, describe what the record appears to be using ONLY "
+        "fields present in the JSON (e.g. recipient/student name, degree or program, institution, certificate ID, "
+        "issue date). If chain_id is 80002, you may say Polygon Amoy testnet; otherwise name the chain only if obvious "
+        "from chain_id; otherwise say 'the configured network'. Do not invent details. "
+        "Paragraph 2 — what was checked: explain token match/existence, issuer and owner addresses in short form, "
+        "whether the credential is marked valid or revoked on-chain, locked/soulbound if applicable, and whether "
+        "off-chain metadata signature verification passed, failed, or could not be checked. "
+        "Tone: helpful and cautious. Never claim legal proof, identity certainty, or that the LLM verified cryptography. "
+        "Do not assert the institution 'authorized' anything beyond what the JSON supports. "
+        "If data is missing or an error field exists, say clearly what could not be verified."
     )
 
     prompt = (
-        "Explain this certificate verification payload in plain English. "
-        "Highlight: whether token exists/matched, issuer/owner addresses, "
-        "valid/revoked status, locked/soulbound status, and whether off-chain metadata signature checked ok.\n\n"
-        f"Verification payload (sanitized):\n{json.dumps(sanitized, ensure_ascii=False)}"
+        "Write the two-paragraph verification summary described in your instructions.\n\n"
+        f"Verification payload (sanitized JSON):\n{json.dumps(sanitized, ensure_ascii=False)}"
     )
 
     try:
