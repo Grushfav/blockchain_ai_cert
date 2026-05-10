@@ -30,6 +30,10 @@ contract TruCert is ERC721, ERC721URIStorage, Ownable {
     error NotWhitelistedIssuer();
     error InvalidToken();
     error NotIssuer();
+    error NotMinter();
+
+    /// @notice Platform hot wallet that may call {mintForIssuer}. Set by owner.
+    address public minter;
 
     event IssuerWhitelisted(address indexed issuer);
     event IssuerRemoved(address indexed issuer);
@@ -61,26 +65,31 @@ contract TruCert is ERC721, ERC721URIStorage, Ownable {
         else emit IssuerRemoved(issuer);
     }
 
+    function setMinter(address m) external onlyOwner {
+        minter = m;
+    }
+
     /**
-     * @notice Mint into escrow: token is held by the university (`msg.sender`) until `claim`.
-     * @param uri Metadata URI (IPFS gateway path or ipfs:// CID).
-     * @param coreHash Hash of canonical academic fields.
+     * @notice Platform minter submits mint; NFT is delivered to the issuer wallet (escrow until claim).
+     * @dev Only {minter}. `issuer` must be whitelisted. `issuerOf[tokenId] == issuer` for verifiers.
      */
-    function mintToEscrow(
+    function mintForIssuer(
+        address issuer,
         string calldata uri,
         bytes32 coreHash,
         string calldata certId
     ) external returns (uint256 tokenId) {
-        if (!whitelistedIssuers[msg.sender]) revert NotWhitelistedIssuer();
+        if (msg.sender != minter) revert NotMinter();
+        if (!whitelistedIssuers[issuer]) revert NotWhitelistedIssuer();
         tokenId = nextTokenId;
         nextTokenId += 1;
-        issuerOf[tokenId] = msg.sender;
+        issuerOf[tokenId] = issuer;
         coreHashOf[tokenId] = coreHash;
         valid[tokenId] = true;
         locked[tokenId] = false;
-        _safeMint(msg.sender, tokenId);
+        _safeMint(issuer, tokenId);
         _setTokenURI(tokenId, uri);
-        emit CertificateMinted(tokenId, msg.sender, uri, coreHash, certId);
+        emit CertificateMinted(tokenId, issuer, uri, coreHash, certId);
     }
 
     /**

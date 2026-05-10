@@ -1,0 +1,4 @@
+cert_id,student_internal_id,student_email,student_full_name,degree_title,issue_date
+batch-demo-001,STU-1001,alice.demo@example.edu,Alice Johnson,BSc Computer Science,2026-05-01
+batch-demo-002,STU-1002,bob.demo@example.edu,Bob Martinez,MSc Data Science,2026-05-01
+batch-demo-003,STU-1003,carol.demo@example.edu,Carol Ng,BEng Software Engineering,2026-05-02

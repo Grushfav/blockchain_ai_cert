@@ -61,4 +61,21 @@ export async function apiJson<T>(path: string, options: ApiOptions = {}): Promis
   return data as T;
 }
 
+/** Authenticated GET for binary or non-JSON responses (e.g. CSV export). */
+export async function apiDownload(path: string): Promise<{ blob: Blob; filename: string }> {
+  const token = getStoredToken();
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}${path}`, { method: "GET", headers });
+  const cd = res.headers.get("Content-Disposition") || "";
+  const m = /filename="([^"]+)"/.exec(cd);
+  const filename = m?.[1] || "download.csv";
+  if (!res.ok) {
+    const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(errBody.error || res.statusText || "Download failed");
+  }
+  const blob = await res.blob();
+  return { blob, filename };
+}
+
 export { API_BASE };

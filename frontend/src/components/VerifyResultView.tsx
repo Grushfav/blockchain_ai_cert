@@ -189,7 +189,7 @@ export function VerifyResultView({ result }: { result: FieldVerifyResponse }) {
   const jsonPayload = useMemo(() => JSON.stringify(result, null, 2), [result]);
 
   return (
-    <div className="verify-result">
+    <div className="verify-result verify-result--enter">
       <div className="verify-summary-card">
         <div className="verify-thumb-row">
           {certImageUrl ? (

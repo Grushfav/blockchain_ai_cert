@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { BusyLabel } from "../components/LoadingSpinner";
 import { useAuth } from "../AuthContext";
 
 export function LoginPage() {
@@ -65,8 +66,8 @@ export function LoginPage() {
             />
           </div>
           {err && <div className="error">{err}</div>}
-          <button type="submit" disabled={busy}>
-            {busy ? "Signing in…" : "Sign in"}
+          <button type="submit" disabled={busy} aria-busy={busy}>
+            <BusyLabel busy={busy} idle="Sign in" busyLabel="Signing in…" />
           </button>
         </form>
         <p className="muted-inline">

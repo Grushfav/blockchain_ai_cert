@@ -1,8 +1,15 @@
-import { BrowserProvider, Contract, isAddress, parseUnits } from "ethers";
+import { Link, useSearchParams } from "react-router-dom";
+import { BrowserProvider, Contract, isAddress, parseUnits, type Signer } from "ethers";
+import { BrandedLoader } from "../components/BrandedLoader";
+import { BusyLabel } from "../components/LoadingSpinner";
 import type { Eip1193Provider } from "ethers";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { API_BASE, apiJson, getStoredToken } from "../api/client";
 import { TRUCERT_ABI } from "../abi/trucertAbi";
+import { InstitutionBottomNav, type InstitutionNavKey } from "../components/InstitutionBottomNav";
+import { institutionLogoDisplayUrl } from "../utils/institutionLogo";
+import { TablePagination } from "../components/TablePagination";
+import { usePagination } from "../hooks/usePagination";
 
 type Me = {
   name: string;
@@ -11,6 +18,13 @@ type Me = {
   wallet_address: string;
   contract_address: string;
   chain_id: number;
+  eip712_nonce?: number;
+  eip712_domain?: {
+    name: string;
+    version: string;
+    chainId: number;
+    verifyingContract: string;
+  } | null;
   logo_uri?: string | null;
   logo_url?: string | null;
   institution_contact_email?: string | null;
@@ -27,6 +41,18 @@ type PreparedMint = {
   cert_id: string;
   next_token_id_hint?: number;
   idempotent?: boolean;
+  mint_request_id?: string;
+  eip712?: {
+    domain: {
+      name: string;
+      version: string;
+      chainId: number;
+      verifyingContract: string;
+    };
+    types: Record<string, Array<{ name: string; type: string }>>;
+    primaryType: string;
+    message: Record<string, unknown>;
+  };
 };
 
 type BatchRow = {
@@ -54,6 +80,8 @@ type ActivityEvent = {
   created_at: string | null;
 };
 
+const AMOY_PUBLIC_RPC = "https://polygon-amoy-bor-rpc.publicnode.com";
+
 const ACTION_LABELS: Record<string, string> = {
   issued: "issued",
   transferred: "transferred",
@@ -62,7 +90,22 @@ const ACTION_LABELS: Record<string, string> = {
   reissued: "reissued",
 };
 
+const MODE_KEYS = new Set<InstitutionNavKey>(["mint", "batch", "audit", "wallet", "settings"]);
+
+function modeFromSearch(raw: string | null): InstitutionNavKey | null {
+  if (!raw) return null;
+  return MODE_KEYS.has(raw as InstitutionNavKey) ? (raw as InstitutionNavKey) : null;
+}
+
 export function UniversityPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [mode, setModeState] = useState<InstitutionNavKey>(() => {
+    const initial =
+      typeof window !== "undefined"
+        ? modeFromSearch(new URLSearchParams(window.location.search).get("mode"))
+        : null;
+    return initial ?? "mint";
+  });
   const [me, setMe] = useState<Me | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
@@ -85,7 +128,6 @@ export function UniversityPage() {
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileErr, setProfileErr] = useState<string | null>(null);
   const [profileMsg, setProfileMsg] = useState<string | null>(null);
-  const [showProfileEditor, setShowProfileEditor] = useState(false);
   const [mintMsg, setMintMsg] = useState<string | null>(null);
   const [mintErr, setMintErr] = useState<string | null>(null);
   const [mintBusy, setMintBusy] = useState(false);
@@ -118,6 +160,7 @@ export function UniversityPage() {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [eventsErr, setEventsErr] = useState<string | null>(null);
   const [eventsBusy, setEventsBusy] = useState(false);
+  const [rpcCopied, setRpcCopied] = useState(false);
 
   const [batchFile, setBatchFile] = useState<File | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
@@ -134,6 +177,20 @@ export function UniversityPage() {
   const [queueRows, setQueueRows] = useState<BatchRow[]>([]);
   const [batchMintBusy, setBatchMintBusy] = useState(false);
   const [batchMintErr, setBatchMintErr] = useState<string | null>(null);
+  const [batchSignBusy, setBatchSignBusy] = useState(false);
+  const [batchExecBusy, setBatchExecBusy] = useState(false);
+  const [batchPrepAllBusy, setBatchPrepAllBusy] = useState(false);
+
+  const [batchAiRowId, setBatchAiRowId] = useState<number | null>(null);
+  const [batchAiQuestion, setBatchAiQuestion] = useState("");
+  const [batchAiBusy, setBatchAiBusy] = useState(false);
+  const [batchAiErr, setBatchAiErr] = useState<string | null>(null);
+  const [batchAiText, setBatchAiText] = useState<string | null>(null);
+  const [batchAiModel, setBatchAiModel] = useState<string | null>(null);
+
+  const invalidPg = usePagination(invalidPreview, 10, `${activeBatchId ?? "none"}-invalid`);
+  const queuePg = usePagination(queueRows, 10, `${activeBatchId ?? "none"}-queue`);
+  const eventsPg = usePagination(events, 10);
 
   const loadMe = useCallback(async () => {
     setLoadErr(null);
@@ -155,6 +212,27 @@ export function UniversityPage() {
   useEffect(() => {
     void loadMe();
   }, [loadMe]);
+
+  useEffect(() => {
+    const m = modeFromSearch(searchParams.get("mode"));
+    setModeState(m ?? "mint");
+  }, [searchParams]);
+
+  const setMode = useCallback(
+    (next: InstitutionNavKey) => {
+      setModeState(next);
+      setSearchParams(
+        (prev) => {
+          const p = new URLSearchParams(prev);
+          if (next === "mint") p.delete("mode");
+          else p.set("mode", next);
+          return p;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
 
   const canUseChain = useMemo(() => {
     if (!me || me.status !== "verified" || !walletAddress) return false;
@@ -189,10 +267,7 @@ export function UniversityPage() {
             chainId: chainHex,
             chainName: "Polygon Amoy",
             nativeCurrency: { name: "POL", symbol: "POL", decimals: 18 },
-            rpcUrls: [
-              "https://polygon-amoy-bor-rpc.publicnode.com",
-              "https://rpc-amoy.polygon.technology",
-            ],
+            rpcUrls: [AMOY_PUBLIC_RPC, "https://rpc-amoy.polygon.technology"],
             blockExplorerUrls: ["https://amoy.polygonscan.com"],
           },
         ],
@@ -232,6 +307,48 @@ export function UniversityPage() {
     return { contract: new Contract(me.contract_address, TRUCERT_ABI, signer), provider };
   }
 
+  function normalizeEip712Message(
+    primaryType: string,
+    message: Record<string, unknown>
+  ): Record<string, string | bigint> {
+    if (primaryType === "MintAuthorization") {
+      return {
+        issuer: String(message.issuer),
+        commitment: String(message.commitment),
+        nonce: BigInt(String(message.nonce)),
+        expiry: BigInt(String(message.expiry)),
+      };
+    }
+    if (primaryType === "BatchMintAuthorization") {
+      return {
+        issuer: String(message.issuer),
+        batchId: BigInt(String(message.batchId)),
+        commitment: String(message.commitment),
+        nonce: BigInt(String(message.nonce)),
+        expiry: BigInt(String(message.expiry)),
+      };
+    }
+    return message as Record<string, string | bigint>;
+  }
+
+  async function signEip712Envelope(
+    signer: Signer,
+    envelope: NonNullable<PreparedMint["eip712"]>
+  ): Promise<string> {
+    const primary = envelope.primaryType;
+    const fields = envelope.types[primary];
+    if (!fields) throw new Error(`EIP-712 missing type ${primary}`);
+    const types = { [primary]: fields };
+    const domain = {
+      name: envelope.domain.name,
+      version: envelope.domain.version,
+      chainId: BigInt(envelope.domain.chainId),
+      verifyingContract: envelope.domain.verifyingContract,
+    };
+    const message = normalizeEip712Message(primary, envelope.message);
+    return signer.signTypedData(domain, types, message);
+  }
+
   async function amoyFeeOverrides(provider: BrowserProvider): Promise<{
     maxPriorityFeePerGas: bigint;
     maxFeePerGas: bigint;
@@ -254,6 +371,16 @@ export function UniversityPage() {
       await getSignerContract();
     } catch (caught: unknown) {
       setWalletErr(friendlyWalletError(caught));
+    }
+  }
+
+  async function copyAmoyRpcUrl() {
+    try {
+      await navigator.clipboard.writeText(AMOY_PUBLIC_RPC);
+      setRpcCopied(true);
+      setTimeout(() => setRpcCopied(false), 2000);
+    } catch {
+      setWalletErr("Could not copy to clipboard. Copy the RPC URL from the hint below manually.");
     }
   }
 
@@ -308,6 +435,7 @@ export function UniversityPage() {
       setQueueRows(data.rows);
     } catch {
       setQueueRows([]);
+      setBatchErr("Could not refresh batch rows. Check backend is running and you are logged in.");
     }
   }
 
@@ -328,7 +456,7 @@ export function UniversityPage() {
         status: b.status,
       });
     } catch {
-      /* ignore */
+      setBatchErr("Could not refresh batch summary. Check backend is reachable.");
     }
   }
 
@@ -337,6 +465,13 @@ export function UniversityPage() {
     setBatchMsg(null);
     if (!batchFile) {
       setBatchErr("Choose a UTF-8 CSV file.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Upload and validate "${batchFile.name}"?\n\nThis creates a batch on the server and validates each row. Continue?`
+      )
+    ) {
       return;
     }
     setBatchBusy(true);
@@ -373,12 +508,37 @@ export function UniversityPage() {
   }
 
   function nextRowToMint(rows: BatchRow[]): BatchRow | null {
-    const ok = new Set(["pending_validation", "prepared", "mint_failed"]);
+    // For preparation we want the earliest row that is still pending (not invalid, not already prepared/minted).
+    const ok = new Set(["pending_validation", "mint_failed"]);
     const cand = rows.filter((r) => ok.has(r.row_status)).sort((a, b) => a.row_index - b.row_index);
     return cand[0] ?? null;
   }
 
-  async function mintNextBatchRow() {
+  async function clearBatchRowPrepare(batchId: number, rowId: number) {
+    setBatchMintErr(null);
+    setBatchMsg(null);
+    if (!window.confirm("Clear prepared state for this row? You can prepare it again afterwards.")) {
+      return;
+    }
+    try {
+      await apiJson<{ message: string }>(
+        `/api/university/mint-batches/${batchId}/rows/${rowId}/reset-prepare`,
+        { method: "POST" }
+      );
+      setBatchMsg("Prepare cleared for that row.");
+      await refreshQueueRows();
+      await refreshBatchMeta(batchId);
+    } catch (caught: unknown) {
+      setBatchMintErr(caught instanceof Error ? caught.message : "Could not clear prepare");
+    }
+  }
+
+  async function clearPrepareForActiveBatchRow(rowId: number) {
+    if (!activeBatchId) return;
+    await clearBatchRowPrepare(activeBatchId, rowId);
+  }
+
+  async function prepareNextBatchRow() {
     setBatchMintErr(null);
     setBatchMsg(null);
     if (!activeBatchId || !queueRows.length) {
@@ -387,58 +547,168 @@ export function UniversityPage() {
     }
     const next = nextRowToMint(queueRows);
     if (!next) {
-      setBatchMsg("Nothing left to mint in this batch (all valid rows minted or blocked).");
+      setBatchMsg("No rows left to prepare, or all valid rows are already minted.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Prepare row ${next.row_index + 1} on the server (IPFS metadata + indexing)?\n\nThis step runs before batch signing.`
+      )
+    ) {
       return;
     }
     setBatchMintBusy(true);
     try {
-      const prepared = await apiJson<PreparedMint>(
-        `/api/university/mint-batches/${activeBatchId}/rows/${next.id}/prepare`,
-        { method: "POST" }
+      const token = getStoredToken();
+      const resP = await fetch(
+        `${API_BASE}/api/university/mint-batches/${activeBatchId}/rows/${next.id}/prepare`,
+        { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {} }
       );
-      const { contract, provider } = await getSignerContract();
-      const tx = await contract.mintToEscrow(
-        prepared.metadata_uri,
-        prepared.core_hash,
-        prepared.cert_id,
-        await amoyFeeOverrides(provider)
-      );
-      const receipt = await tx.wait();
-      if (!receipt) throw new Error("No transaction receipt");
-      let tokenId: number | null = null;
-      const addr = (me?.contract_address || "").toLowerCase();
-      for (const lg of receipt.logs) {
-        if (lg.address.toLowerCase() !== addr) continue;
-        try {
-          const ev = contract.interface.parseLog({ topics: [...lg.topics], data: lg.data });
-          if (ev?.name === "CertificateMinted") {
-            tokenId = Number(ev.args.tokenId);
-            break;
-          }
-        } catch {
-          /* skip */
-        }
+      const prepBody = (await resP.json()) as PreparedMint & { error?: string };
+      if (!resP.ok) {
+        throw new Error(prepBody.error || "Prepare failed");
       }
-      if (tokenId == null && prepared.next_token_id_hint != null) {
-        tokenId = prepared.next_token_id_hint;
-      }
-      if (tokenId == null) throw new Error("Could not determine token ID from receipt");
-      await apiJson<{ message: string }>(
-        `/api/university/mint-batches/${activeBatchId}/rows/${next.id}/confirm-mint`,
-        {
-          method: "POST",
-          json: { tx_hash: receipt.hash, token_id: tokenId },
-        }
+      setBatchMsg(
+        prepBody.idempotent
+          ? `Row ${next.row_index + 1} already prepared.`
+          : `Prepared row ${next.row_index + 1} (metadata pinned). Next: sign batch when all rows are prepared.`
       );
-      setBatchMsg(`Minted row ${next.row_index + 1} as token ${tokenId}. Tx: ${receipt.hash}`);
       await refreshQueueRows();
       await refreshInvalidPreview();
       await refreshBatchMeta();
-      await syncAndRefreshActivity();
     } catch (caught: unknown) {
       setBatchMintErr(friendlyWalletError(caught));
     } finally {
       setBatchMintBusy(false);
+    }
+  }
+
+  async function prepareAllBatchRows() {
+    setBatchMintErr(null);
+    setBatchMsg(null);
+    if (!activeBatchId || !queueRows.length) {
+      setBatchMintErr("Upload a batch first.");
+      return;
+    }
+    setBatchPrepAllBusy(true);
+    try {
+      // Prepare all rows that still need server-side preparation.
+      const targets = [...queueRows]
+        .filter((r) => ["pending_validation", "mint_failed"].includes(r.row_status))
+        .sort((a, b) => a.row_index - b.row_index);
+
+      if (targets.length === 0) {
+        setBatchMsg("All valid rows are already prepared (or minted/invalid).");
+        return;
+      }
+
+      if (
+        !window.confirm(
+          `Prepare all ${targets.length} remaining row(s) on the server?\n\nThis may take a while and pins metadata for each row.`
+        )
+      ) {
+        return;
+      }
+
+      const token = getStoredToken();
+      let preparedCount = 0;
+      for (const r of targets) {
+        setBatchMsg(`Preparing row ${r.row_index + 1}… (${preparedCount}/${targets.length})`);
+        const resP = await fetch(
+          `${API_BASE}/api/university/mint-batches/${activeBatchId}/rows/${r.id}/prepare`,
+          { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {} }
+        );
+        const prepBody = (await resP.json()) as PreparedMint & { error?: string };
+        if (!resP.ok) throw new Error(prepBody.error || `Prepare failed for row ${r.row_index + 1}`);
+        preparedCount += 1;
+      }
+      setBatchMsg(`Prepared ${preparedCount} row(s). You can now sign batch authorization.`);
+      await refreshQueueRows();
+      await refreshInvalidPreview();
+      await refreshBatchMeta();
+    } catch (caught: unknown) {
+      setBatchMintErr(friendlyWalletError(caught));
+    } finally {
+      setBatchPrepAllBusy(false);
+    }
+  }
+
+  async function signBatchMintAuthorization() {
+    setBatchMintErr(null);
+    setBatchMsg(null);
+    if (!activeBatchId) {
+      setBatchMintErr("No active batch.");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Sign the batch EIP-712 authorization in your wallet?\n\nThis authorizes the platform minter to mint all prepared rows. No gas is paid by you for this signature."
+      )
+    ) {
+      return;
+    }
+    setBatchSignBusy(true);
+    try {
+      const data = await apiJson<{
+        eip712: NonNullable<PreparedMint["eip712"]>;
+        error?: string;
+      }>(`/api/university/mint-batches/${activeBatchId}/eip712`);
+      const { provider } = await getSignerContract();
+      const signer = await provider.getSigner();
+      const sig = await signEip712Envelope(signer, data.eip712);
+      await apiJson<{ message: string }>(
+        `/api/university/mint-batches/${activeBatchId}/submit-authorization`,
+        { method: "POST", json: { signature: sig } }
+      );
+      setBatchMsg("Batch authorization signed. Run “Execute batch mints” to submit on-chain mints (gas paid by platform minter).");
+      await refreshBatchMeta();
+      await loadMe();
+    } catch (caught: unknown) {
+      setBatchMintErr(friendlyWalletError(caught));
+    } finally {
+      setBatchSignBusy(false);
+    }
+  }
+
+  async function executeBatchMints() {
+    setBatchMintErr(null);
+    setBatchMsg(null);
+    if (!activeBatchId) {
+      setBatchMintErr("No active batch.");
+      return;
+    }
+    if (
+      !window.confirm(
+        "Execute on-chain batch mints now?\n\nThe platform minter will submit transactions for prepared rows. This cannot be undone for each minted token."
+      )
+    ) {
+      return;
+    }
+    setBatchExecBusy(true);
+    try {
+      let remaining = -1;
+      for (let guard = 0; guard < 200; guard += 1) {
+        const res = await apiJson<{ remaining_rows: number; minted: { token_id: number }[]; error?: string }>(
+          `/api/university/mint-batches/${activeBatchId}/execute`,
+          { method: "POST", json: { max_mints: 40 } }
+        );
+        remaining = res.remaining_rows;
+        await refreshQueueRows();
+        await refreshBatchMeta();
+        if (res.minted?.length) {
+          setBatchMsg(`Minted ${res.minted.length} certificate(s) this chunk. ${remaining} row(s) remaining.`);
+        }
+        if (remaining === 0) {
+          setBatchMsg("Batch minting complete.");
+          break;
+        }
+      }
+      await syncAndRefreshActivity();
+      await loadMe();
+    } catch (caught: unknown) {
+      setBatchMintErr(friendlyWalletError(caught));
+    } finally {
+      setBatchExecBusy(false);
     }
   }
 
@@ -461,6 +731,26 @@ export function UniversityPage() {
     URL.revokeObjectURL(url);
   }
 
+  async function runBatchRowAi() {
+    if (!activeBatchId || batchAiRowId == null) return;
+    setBatchAiErr(null);
+    setBatchAiText(null);
+    setBatchAiModel(null);
+    setBatchAiBusy(true);
+    try {
+      const data = await apiJson<{ model?: string; text?: string }>(
+        `/api/university/mint-batches/${activeBatchId}/rows/${batchAiRowId}/ai-qa`,
+        { method: "POST", json: { question: batchAiQuestion.trim() || undefined } }
+      );
+      setBatchAiText((data.text || "").trim() || "No response text.");
+      setBatchAiModel((data.model || "").trim() || null);
+    } catch (caught: unknown) {
+      setBatchAiErr(caught instanceof Error ? caught.message : "AI request failed");
+    } finally {
+      setBatchAiBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (me?.status === "verified") {
       void syncAndRefreshActivity();
@@ -468,34 +758,49 @@ export function UniversityPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me?.status]);
 
+  useEffect(() => {
+    setBatchAiRowId(null);
+    setBatchAiText(null);
+    setBatchAiErr(null);
+    setBatchAiModel(null);
+    setBatchAiQuestion("");
+  }, [activeBatchId]);
+
   async function mint(e: React.FormEvent) {
     e.preventDefault();
     setMintErr(null);
     setMintMsg(null);
+    if (
+      !window.confirm(
+        `Mint credential on-chain?\n\nStudent: ${studentName}\nCert ID: ${certId}\n\nYou will sign an EIP-712 authorization in your wallet, then the platform minter submits the mint.`
+      )
+    ) {
+      return;
+    }
     setMintBusy(true);
     try {
-      const prepared = await apiJson<PreparedMint>(
-        "/api/university/certificates/prepare-mint",
-        {
-          method: "POST",
-          json: {
-            student_name: studentName,
-            degree_type: degreeType,
-            cert_id: certId,
-            issue_date: issueDate,
-          },
-        }
+      const prepared = await apiJson<PreparedMint>("/api/university/certificates/prepare-mint", {
+        method: "POST",
+        json: {
+          student_name: studentName,
+          degree_type: degreeType,
+          cert_id: certId,
+          issue_date: issueDate,
+        },
+      });
+      if (!prepared.eip712 || !prepared.mint_request_id) {
+        throw new Error("Server did not return EIP-712 authorization data.");
+      }
+      const { provider } = await getSignerContract();
+      const signer = await provider.getSigner();
+      const sig = await signEip712Envelope(signer, prepared.eip712);
+      const out = await apiJson<{ token_id: number; tx_hash: string }>(
+        "/api/university/certificates/submit-authorization",
+        { method: "POST", json: { mint_request_id: prepared.mint_request_id, signature: sig } }
       );
-      const { contract, provider } = await getSignerContract();
-      const tx = await contract.mintToEscrow(
-        prepared.metadata_uri,
-        prepared.core_hash,
-        prepared.cert_id,
-        await amoyFeeOverrides(provider)
-      );
-      const receipt = await tx.wait();
-      setMintMsg(`Minted on-chain. Tx: ${receipt.hash}`);
+      setMintMsg(`Minted on-chain as token ${out.token_id}. Minter tx: ${out.tx_hash}`);
       await syncAndRefreshActivity();
+      await loadMe();
     } catch (caught: unknown) {
       setMintErr(friendlyWalletError(caught));
     } finally {
@@ -512,11 +817,19 @@ export function UniversityPage() {
       setClaimErr("Token ID must be a non-negative integer.");
       return;
     }
+    if (!isAddress(studentWallet.trim())) {
+      setClaimErr("Student wallet must be a valid 0x address.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Claim token #${tid} to the student wallet and lock (soulbound)?\n\nRecipient: ${studentWallet.trim()}\n\nYou will submit an on-chain transaction.`
+      )
+    ) {
+      return;
+    }
     setClaimBusy(true);
     try {
-      if (!isAddress(studentWallet.trim())) {
-        throw new Error("Student wallet must be a valid 0x address.");
-      }
       const { contract, provider } = await getSignerContract();
       const tx = await contract.claim(tid, studentWallet.trim(), await amoyFeeOverrides(provider));
       const receipt = await tx.wait();
@@ -536,6 +849,13 @@ export function UniversityPage() {
     const tid = Number(revokeTid);
     if (!Number.isInteger(tid) || tid < 0) {
       setRevokeErr("Token ID must be a non-negative integer.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Revoke certificate for token #${tid} on-chain?\n\nVerifiers will see this credential as invalid. This action is serious — continue?`
+      )
+    ) {
       return;
     }
     setRevokeBusy(true);
@@ -561,6 +881,13 @@ export function UniversityPage() {
       setBurnErr("Token ID must be a non-negative integer.");
       return;
     }
+    if (
+      !window.confirm(
+        `Permanently burn token #${tid}?\n\nThis destroys the NFT on-chain. Only do this for revoked credentials. This cannot be undone.`
+      )
+    ) {
+      return;
+    }
     setBurnBusy(true);
     try {
       const { contract, provider } = await getSignerContract();
@@ -582,6 +909,13 @@ export function UniversityPage() {
     const oldTokenId = Number(reissueOldTid);
     if (!Number.isInteger(oldTokenId) || oldTokenId < 0) {
       setReissueErr("Old token ID must be a non-negative integer.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Reissue certificate from old token #${oldTokenId}?\n\nNew cert ID: ${reissueCertId}\nStudent: ${reissueStudentName}\n\nThis revokes the old token and mints a replacement — you will submit an on-chain transaction.`
+      )
+    ) {
       return;
     }
     setReissueBusy(true);
@@ -679,6 +1013,19 @@ export function UniversityPage() {
     }
   }
 
+  // For batch signing we require every non-invalid, non-minted row to be in `prepared` state.
+  // Backend rejects batch auth if any row is still pending_validation (or mint_failed).
+  const batchRowsNeedingPreparation = queueRows.filter((r) => {
+    const skip = ["invalid", "mint_confirmed", "email_sent", "email_failed"].includes(r.row_status);
+    return !skip;
+  });
+  const batchAllReadyForSigning =
+    batchRowsNeedingPreparation.length > 0 &&
+    batchRowsNeedingPreparation.every((r) => r.row_status === "prepared");
+  const batchCanSign = Boolean(verified && activeBatchId != null && canUseChain && batchAllReadyForSigning);
+
+  const identityLogoSrc = institutionLogoDisplayUrl(me?.logo_url, me?.logo_uri);
+
   return (
     <>
       <header>
@@ -688,138 +1035,161 @@ export function UniversityPage() {
           MetaMask (or any injected wallet) on Polygon Amoy — private keys are never entered or sent
           to this app.
         </p>
+        <p className="muted-inline">
+          <Link to="/university/overview">University overview hub</Link>
+          {" · "}
+          <Link to="/university/analytics">Open institution dashboard</Link> for issuance stats, batch outcomes, and
+          recent activity.
+        </p>
       </header>
 
-      <section className="panel">
-        <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <h2 className="subhead" style={{ margin: 0 }}>Profile</h2>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => setShowProfileEditor((v) => !v)}
-            disabled={!verified}
-          >
-            {showProfileEditor ? "Hide details editor" : "Edit institution details"}
-          </button>
-        </div>
-        {loadErr && <div className="error">{loadErr}</div>}
-        {me && (
-          <div className="grid profile-summary">
-            <div className="kv">
-              <span>Institution</span>
-              <span className="institution-identity">
-                {me.logo_url ? (
-                  <img src={me.logo_url} alt="Institution logo" className="institution-avatar" />
-                ) : (
-                  <span className="institution-avatar-placeholder" aria-hidden>
-                    {me.name.charAt(0).toUpperCase()}
-                  </span>
-                )}
-                <span>{me.name}</span>
+      <div className="inst-portal">
+      {me && (
+        <section className="uni-status-strip" aria-label="Portal status">
+          <div className="uni-status-strip__main">
+            <span className="uni-status-strip__name">{me.name}</span>
+            <span className={`status ${me.status}`}>{me.status}</span>
+          </div>
+          <div className="uni-status-strip__meta">
+            <span>
+              Amoy · chain {me.chain_id}
+            </span>
+            {verified && walletAddress && canUseChain && (
+              <span className="uni-status-strip__ok">Issuer wallet ready</span>
+            )}
+            {verified && walletAddress && !canUseChain && (
+              <span className="uni-status-strip__warn">Switch network or connect issuer wallet</span>
+            )}
+            {verified && !walletAddress && <span className="muted">Wallet not connected</span>}
+            {!verified && <span className="muted">Awaiting admin approval to mint</span>}
+          </div>
+        </section>
+      )}
+
+      {me && (
+        <section className="panel inst-identity-card" aria-label="Institution identity">
+          <div className="inst-card-head">
+            <h2 className="inst-card-title">Institution Identity</h2>
+            <button
+              type="button"
+              className="inst-card-action"
+              onClick={() => {
+                setMode("settings");
+              }}
+              disabled={!verified}
+            >
+              Edit profile
+            </button>
+          </div>
+          <div className="inst-identity-row">
+            {identityLogoSrc ? (
+              <img src={identityLogoSrc} alt="" className="inst-identity-avatar" />
+            ) : (
+              <span className="inst-identity-avatar inst-identity-avatar--ph" aria-hidden>
+                {me.name.charAt(0).toUpperCase()}
               </span>
-            </div>
-            <div className="kv">
-              <span>Internal ID</span>
-              <span>{me.internal_id}</span>
-            </div>
-            <div className="kv">
-              <span>Status</span>
-              <span>
-                <span className={`status ${me.status}`}>{me.status}</span>
-              </span>
-            </div>
-            <div className="kv">
-              <span>Approved issuer wallet</span>
-              <span className="mono small">{me.wallet_address}</span>
-            </div>
-            <div className="kv">
-              <span>Contract</span>
-              <span className="mono small">{me.contract_address}</span>
-            </div>
-            <div className="kv">
-              <span>Expected chain</span>
-              <span>Amoy ({me.chain_id})</span>
-            </div>
-            <div className="kv">
-              <span>Contact email</span>
-              <span>{me.institution_contact_email || "—"}</span>
-            </div>
-            <div className="kv">
-              <span>Contact phone</span>
-              <span>{me.institution_contact_phone || "—"}</span>
-            </div>
-            <div className="kv">
-              <span>Website</span>
-              <span>{me.institution_website || "—"}</span>
-            </div>
-            <div className="kv">
-              <span>License ID</span>
-              <span>{me.institution_license_id || "—"}</span>
-            </div>
-            <div className="kv">
-              <span>License authority</span>
-              <span>{me.institution_license_authority || "—"}</span>
-            </div>
-            <div className="kv">
-              <span>License valid until</span>
-              <span>{me.institution_license_valid_until || "—"}</span>
+            )}
+            <div className="inst-identity-text">
+              <p className="inst-identity-name">{me.name}</p>
+              <p className="inst-identity-sub mono">{me.internal_id}</p>
             </div>
           </div>
-        )}
-        {!verified && me && (
-          <p className="warn-banner">
-            Your institution is not verified yet. Minting and claiming are blocked until an admin
-            approves your registration.
-          </p>
-        )}
-        <div className="stack" style={{ marginTop: "0.85rem" }}>
+          {loadErr && <div className="error">{loadErr}</div>}
+          <div className="inst-identity-grid">
+            <div className="inst-identity-kv">
+              <span>Institution ID</span>
+              <strong className="mono">{me.internal_id}</strong>
+            </div>
+            <div className="inst-identity-kv">
+              <span>Smart contract</span>
+              <strong className="mono">{me.contract_address ? `${me.contract_address.slice(0, 6)}…${me.contract_address.slice(-4)}` : "—"}</strong>
+            </div>
+            <div className="inst-identity-kv">
+              <span>Wallet address</span>
+              <strong className="mono">{me.wallet_address ? `${me.wallet_address.slice(0, 6)}…${me.wallet_address.slice(-4)}` : "—"}</strong>
+            </div>
+            <div className="inst-identity-kv">
+              <span>Contact email</span>
+              <strong>{me.institution_contact_email || "—"}</strong>
+            </div>
+          </div>
+          {!verified && (
+            <div className="warn-banner" style={{ marginTop: "0.85rem" }}>
+              Your institution is not verified yet. Minting and claiming are blocked until an admin approves your registration.
+            </div>
+          )}
+        </section>
+      )}
+
+      {mode === "wallet" && (
+        <section className="panel">
+          <div className="inst-card-head">
+            <h2 className="inst-card-title">Wallet</h2>
+          </div>
           <p className="muted-inline" style={{ marginTop: 0 }}>
-            Use the same wallet address you submitted at registration. Claim is signed by the issuer
-            (you); only the student address is passed as the recipient.
+            Use the same wallet address you submitted at registration. Claim is signed by the issuer (you); only the student
+            address is passed as the recipient.
           </p>
           <div className="row">
             <button type="button" onClick={() => void connectWallet()} disabled={!verified}>
               Connect issuer wallet
             </button>
+            <button type="button" className="btn-secondary" onClick={() => void copyAmoyRpcUrl()} disabled={!verified}>
+              {rpcCopied ? "Copied" : "Copy Amoy RPC URL"}
+            </button>
             <span className="muted-inline">
               Connected: <span className="mono small">{walletAddress || "not connected"}</span>
             </span>
           </div>
-        </div>
-        {!canUseChain && verified && (
-          <p className="warn-banner">
-            Chain actions are blocked until MetaMask is on Polygon Amoy and the connected account
-            matches your approved issuer wallet.
-          </p>
-        )}
-        {walletErr && <div className="error">{walletErr}</div>}
-        {showProfileEditor && (
-          <>
-            <p className="muted-inline">
-              These fields are stored on your university profile and automatically included in
-              mint/reissue metadata.
+          {verified && (
+            <p className="muted-inline small" style={{ marginTop: "0.55rem" }}>
+              If you see “rate limited” when sending transactions: MetaMask → <strong>Settings</strong> → <strong>Networks</strong> →
+              select <strong>Polygon Amoy</strong> → set <strong>RPC URL</strong> to{" "}
+              <code className="mono small">{AMOY_PUBLIC_RPC}</code> (or use <strong>Copy Amoy RPC URL</strong> above).
             </p>
-            <form className="stack" onSubmit={saveInstitutionProfile}>
-              <div>
-                <label htmlFor="logo_file">Institution logo (png/jpeg/webp/gif, max 2MB)</label>
-                <input
-                  id="logo_file"
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
-                  disabled={!verified}
-                />
-                <div className="row" style={{ marginTop: "0.45rem" }}>
-                  <button type="button" onClick={() => void uploadLogo()} disabled={!verified || logoBusy}>
-                    {logoBusy ? "Uploading…" : "Upload logo"}
-                  </button>
-                  {logoMsg && <span className="muted-inline">{logoMsg}</span>}
-                </div>
-                {logoErr && <div className="error">{logoErr}</div>}
+          )}
+          {!canUseChain && verified && (
+            <div className="warn-banner">
+              Chain actions are blocked until MetaMask is on Polygon Amoy and the connected account matches your approved issuer wallet.
+            </div>
+          )}
+          {walletErr && <div className="error">{walletErr}</div>}
+        </section>
+      )}
+
+      {mode === "settings" && (
+        <section className="panel">
+          <div className="inst-card-head">
+            <h2 className="inst-card-title">Settings</h2>
+          </div>
+          <p className="muted-inline" style={{ marginTop: 0 }}>
+            These fields are stored on your university profile and automatically included in mint/reissue metadata.
+          </p>
+          <form className="stack" onSubmit={saveInstitutionProfile}>
+            <div className="inst-field">
+              <label htmlFor="logo_file">Institution logo (png/jpeg/webp/gif, max 2MB)</label>
+              <input
+                id="logo_file"
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
+                disabled={!verified}
+              />
+              <div className="row" style={{ marginTop: "0.45rem" }}>
+                <button type="button" onClick={() => void uploadLogo()} disabled={!verified || logoBusy} aria-busy={logoBusy}>
+                  <BusyLabel busy={logoBusy} idle="Upload logo" busyLabel="Uploading…" />
+                </button>
+                {logoMsg && <span className="muted-inline">{logoMsg}</span>}
               </div>
-              <div className="row two-col">
-                <div>
-                  <label htmlFor="profile_email">Institution contact email</label>
+              {logoErr && <div className="error">{logoErr}</div>}
+            </div>
+            <div className="row two-col">
+              <div className="inst-field">
+                <label htmlFor="profile_email">Contact email</label>
+                <div className="inst-input-wrap">
+                  <span className="inst-input-icon" aria-hidden>
+                    ✉
+                  </span>
                   <input
                     id="profile_email"
                     type="email"
@@ -828,8 +1198,13 @@ export function UniversityPage() {
                     required
                   />
                 </div>
-                <div>
-                  <label htmlFor="profile_phone">Institution contact phone</label>
+              </div>
+              <div className="inst-field">
+                <label htmlFor="profile_phone">Contact phone</label>
+                <div className="inst-input-wrap">
+                  <span className="inst-input-icon" aria-hidden>
+                    ☎
+                  </span>
                   <input
                     id="profile_phone"
                     value={profileContactPhone}
@@ -838,29 +1213,34 @@ export function UniversityPage() {
                   />
                 </div>
               </div>
-              <div className="row two-col">
-                <div>
-                  <label htmlFor="profile_web">Institution website</label>
-                  <input
-                    id="profile_web"
-                    value={profileWebsite}
-                    onChange={(e) => setProfileWebsite(e.target.value)}
-                    required
-                  />
-                </div>
-                <div>
-                  <label htmlFor="profile_lic_id">Institution license ID</label>
-                  <input
-                    id="profile_lic_id"
-                    value={profileLicenseId}
-                    onChange={(e) => setProfileLicenseId(e.target.value)}
-                    required
-                  />
+            </div>
+            <div className="row two-col">
+              <div className="inst-field">
+                <label htmlFor="profile_web">Website</label>
+                <div className="inst-input-wrap">
+                  <span className="inst-input-icon" aria-hidden>
+                    🔗
+                  </span>
+                  <input id="profile_web" value={profileWebsite} onChange={(e) => setProfileWebsite(e.target.value)} required />
                 </div>
               </div>
-              <div className="row two-col">
-                <div>
-                  <label htmlFor="profile_lic_auth">Institution license authority</label>
+              <div className="inst-field">
+                <label htmlFor="profile_lic_id">License ID</label>
+                <div className="inst-input-wrap">
+                  <span className="inst-input-icon" aria-hidden>
+                    ▣
+                  </span>
+                  <input id="profile_lic_id" value={profileLicenseId} onChange={(e) => setProfileLicenseId(e.target.value)} required />
+                </div>
+              </div>
+            </div>
+            <div className="row two-col">
+              <div className="inst-field">
+                <label htmlFor="profile_lic_auth">License authority</label>
+                <div className="inst-input-wrap">
+                  <span className="inst-input-icon" aria-hidden>
+                    ⚖
+                  </span>
                   <input
                     id="profile_lic_auth"
                     value={profileLicenseAuthority}
@@ -868,8 +1248,13 @@ export function UniversityPage() {
                     required
                   />
                 </div>
-                <div>
-                  <label htmlFor="profile_lic_valid">License valid until</label>
+              </div>
+              <div className="inst-field">
+                <label htmlFor="profile_lic_valid">License valid until</label>
+                <div className="inst-input-wrap">
+                  <span className="inst-input-icon" aria-hidden>
+                    📅
+                  </span>
                   <input
                     id="profile_lic_valid"
                     type="date"
@@ -879,66 +1264,145 @@ export function UniversityPage() {
                   />
                 </div>
               </div>
-              {profileErr && <div className="error">{profileErr}</div>}
-              {profileMsg && <div className="success">{profileMsg}</div>}
-              <button type="submit" disabled={profileBusy || !verified}>
-                {profileBusy ? "Saving…" : "Save institution details"}
-              </button>
-            </form>
-          </>
-        )}
-      </section>
+            </div>
+            {profileErr && <div className="error">{profileErr}</div>}
+            {profileMsg && <div className="success">{profileMsg}</div>}
+            <button type="submit" disabled={profileBusy || !verified} aria-busy={profileBusy}>
+              <BusyLabel busy={profileBusy} idle="Save changes" busyLabel="Saving…" />
+            </button>
+          </form>
+        </section>
+      )}
 
-      <section className="panel">
+      {mode === "mint" && (
+      <section className="panel panel-busy-anchor">
+        {mintBusy && (
+          <div className="panel-busy-overlay" role="status" aria-live="polite" aria-busy="true">
+            <BrandedLoader size="md" />
+            <span className="panel-busy-overlay__text">Authorizing / minting…</span>
+          </div>
+        )}
         <h2 className="subhead">Mint certificate (escrow)</h2>
+        <ol className="uni-flow-steps" aria-label="Typical mint sequence">
+          <li className="uni-flow-steps__item">
+            <span>1</span> Enter certificate details
+          </li>
+          <li className="uni-flow-steps__item">
+            <span>2</span> Sign EIP-712 in your wallet
+          </li>
+          <li className="uni-flow-steps__item">
+            <span>3</span> Platform submits mint on-chain
+          </li>
+        </ol>
         <p className="muted-inline">
-          Backend pins metadata (JWT); your wallet signs <code>mintToEscrow</code> with the returned{" "}
-          <code>metadata_uri</code>, <code>core_hash</code>, and <code>cert_id</code>.
+          Backend pins Ed25519-signed metadata to IPFS, then you sign an <strong>EIP-712 authorization</strong> in
+          MetaMask (no gas). TruCert&apos;s platform minter wallet submits <code>mintForIssuer</code>; the NFT is
+          minted to your issuer address.
         </p>
         <form className="stack" onSubmit={mint}>
           <div className="row two-col">
-            <div>
-              <label htmlFor="cert_id">Certificate ID (global unique)</label>
-              <input id="cert_id" value={certId} onChange={(e) => setCertId(e.target.value)} required />
+            <div className="inst-field">
+              <label htmlFor="cert_id">Certificate ID</label>
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  🏷
+                </span>
+                <input
+                  id="cert_id"
+                  value={certId}
+                  onChange={(e) => setCertId(e.target.value)}
+                  placeholder="e.g. MU-2024-001"
+                  required
+                />
+              </div>
             </div>
-            <div>
+            <div className="inst-field">
               <label htmlFor="issue_date">Issue date</label>
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  📅
+                </span>
+                <input
+                  id="issue_date"
+                  value={issueDate}
+                  onChange={(e) => setIssueDate(e.target.value)}
+                  placeholder="YYYY-MM-DD"
+                  required
+                />
+              </div>
+            </div>
+          </div>
+          <div className="inst-field">
+            <label htmlFor="student_name">Student full name</label>
+            <div className="inst-input-wrap">
+              <span className="inst-input-icon" aria-hidden>
+                👤
+              </span>
               <input
-                id="issue_date"
-                value={issueDate}
-                onChange={(e) => setIssueDate(e.target.value)}
-                placeholder="e.g. 2026-04-10"
+                id="student_name"
+                value={studentName}
+                onChange={(e) => setStudentName(e.target.value)}
+                placeholder="e.g. Alex Rivera"
                 required
               />
             </div>
           </div>
-          <div>
-            <label htmlFor="student_name">Student name</label>
-            <input
-              id="student_name"
-              value={studentName}
-              onChange={(e) => setStudentName(e.target.value)}
-              required
-            />
-          </div>
-          <div>
-            <label htmlFor="degree">Degree type</label>
-            <input
-              id="degree"
-              value={degreeType}
-              onChange={(e) => setDegreeType(e.target.value)}
-              required
-            />
+          <div className="inst-field">
+            <label htmlFor="degree">Degree program</label>
+            <div className="inst-input-wrap">
+              <span className="inst-input-icon" aria-hidden>
+                🎓
+              </span>
+              <input
+                id="degree"
+                value={degreeType}
+                onChange={(e) => setDegreeType(e.target.value)}
+                placeholder="e.g. B.Sc. Computer Science"
+                required
+              />
+            </div>
           </div>
           {mintErr && <div className="error">{mintErr}</div>}
           {mintMsg && <div className="success">{mintMsg}</div>}
-          <button type="submit" disabled={mintBusy || !verified || !canUseChain}>
-            {mintBusy ? "Minting…" : "Mint to escrow"}
+          <button
+            type="submit"
+            className="inst-submit-wide"
+            disabled={mintBusy || !verified || !canUseChain}
+            aria-busy={mintBusy}
+          >
+            <BusyLabel busy={mintBusy} idle="Generate credential" busyLabel="Authorizing / minting…" />
           </button>
         </form>
       </section>
+      )}
 
-      <section className="panel">
+      {mode === "audit" && (
+        <section className="panel risk-monitoring-teaser">
+          <h2 className="subhead">Audit &amp; risk monitoring</h2>
+          <p className="muted-inline small">
+            Review operational signals, batch stress metrics, and an optional AI summary on the dedicated risk dashboard.
+          </p>
+          <div className="row" style={{ gap: "0.65rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
+            <Link to="/university/risk" className="risk-monitoring-teaser__cta">
+              Open risk dashboard
+            </Link>
+            <Link to="/university/analytics" className="btn-secondary" style={{ textDecoration: "none", display: "inline-flex" }}>
+              Institution dashboard
+            </Link>
+          </div>
+        </section>
+      )}
+
+      {mode === "batch" && (
+      <section className="panel panel-busy-anchor">
+        {(batchExecBusy || batchPrepAllBusy) && (
+          <div className="panel-busy-overlay" role="status" aria-live="polite">
+            <BrandedLoader size="md" />
+            <span className="panel-busy-overlay__text">
+              {batchExecBusy ? "Executing batch mints…" : "Preparing all rows…"}
+            </span>
+          </div>
+        )}
         <h2 className="subhead">Batch mint (CSV)</h2>
         <p className="muted-inline small">
           UTF-8 CSV with headers:{" "}
@@ -949,19 +1413,49 @@ export function UniversityPage() {
           only in the database — they are never pinned to IPFS.
         </p>
         <div className="stack" style={{ marginTop: "0.65rem" }}>
-          <div>
-            <label htmlFor="batch_csv">CSV file</label>
-            <input
-              id="batch_csv"
-              type="file"
-              accept=".csv,text/csv"
-              onChange={(e) => setBatchFile(e.target.files?.[0] || null)}
-              disabled={!verified || batchBusy}
-            />
+          <div className="inst-field">
+            <label htmlFor="batch_csv">Student list (CSV)</label>
+            <div
+              className="inst-dropzone"
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const f = e.dataTransfer.files?.[0];
+                if (!f) return;
+                if (f.name.toLowerCase().endsWith(".csv") || f.type === "text/csv" || f.type === "application/vnd.ms-excel") {
+                  setBatchFile(f);
+                }
+              }}
+            >
+              <input
+                id="batch_csv"
+                className="inst-dropzone-input"
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(e) => setBatchFile(e.target.files?.[0] || null)}
+                disabled={!verified || batchBusy}
+              />
+              <div className="inst-dropzone-ui">
+                <span className="inst-dropzone-icon" aria-hidden>
+                  ☁
+                </span>
+                <p>Click or drag to upload student list</p>
+                <p className="inst-dropzone-hint muted">
+                  UTF-8 · max 500 rows ·{" "}
+                  <a href="/samples/batch-mint-example.csv" download className="home-link">
+                    Download CSV template
+                  </a>
+                </p>
+              </div>
+            </div>
           </div>
           <div className="row">
-            <button type="button" onClick={() => void uploadMintBatch()} disabled={!verified || batchBusy}>
-              {batchBusy ? "Uploading…" : "Upload & validate batch"}
+            <button type="button" onClick={() => void uploadMintBatch()} disabled={!verified || batchBusy} aria-busy={batchBusy}>
+              <BusyLabel busy={batchBusy} idle="Upload & validate batch" busyLabel="Uploading…" />
             </button>
             {activeBatchId != null && (
               <button
@@ -995,7 +1489,7 @@ export function UniversityPage() {
                 </tr>
               </thead>
               <tbody>
-                {invalidPreview.map((r) => (
+                {invalidPg.pageItems.map((r) => (
                   <tr key={r.id}>
                     <td>{r.row_index + 1}</td>
                     <td className="mono small">{r.cert_id || "—"}</td>
@@ -1008,12 +1502,23 @@ export function UniversityPage() {
                 ))}
               </tbody>
             </table>
+            <TablePagination
+              page={invalidPg.page}
+              pageSize={invalidPg.pageSize}
+              totalPages={invalidPg.totalPages}
+              total={invalidPg.total}
+              from={invalidPg.from}
+              to={invalidPg.to}
+              onPageChange={invalidPg.setPage}
+              onPageSizeChange={invalidPg.setPageSize}
+            />
           </div>
         )}
         <div className="stack" style={{ marginTop: "1rem" }}>
           <p className="muted-inline small" style={{ marginTop: 0 }}>
-            Mint one row at a time: prepare on server → MetaMask signs <code>mintToEscrow</code> → confirm on
-            server. Only one row may be in <code>prepared</code> state at a time.
+            Prepare each valid row on the server (IPFS + index). When every non-invalid row is <code>prepared</code>,
+            sign one <strong>batch EIP-712</strong> authorization (no gas), then run <strong>Execute batch mints</strong>{" "}
+            so the platform minter submits one chain transaction per row.
           </p>
           {batchSummary && batchSummary.valid_rows > 0 && (
             <p className="muted-inline small">
@@ -1027,13 +1532,47 @@ export function UniversityPage() {
             </p>
           )}
           {batchMintErr && <div className="error">{batchMintErr}</div>}
-          <div className="row">
+          {!batchCanSign && activeBatchId != null && batchRowsNeedingPreparation.length > 0 && (
+            <div className="warn-banner">
+              Batch signing requires that all non-invalid rows are <strong>prepared</strong>.
+              Click <strong>Prepare next row</strong> until every row shows <code>prepared</code>.
+            </div>
+          )}
+          <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
             <button
               type="button"
-              onClick={() => void mintNextBatchRow()}
-              disabled={!verified || !canUseChain || batchMintBusy || activeBatchId == null}
+              onClick={() => void prepareNextBatchRow()}
+              disabled={!verified || batchMintBusy || activeBatchId == null}
+              aria-busy={batchMintBusy}
             >
-              {batchMintBusy ? "Minting…" : "Mint next in batch"}
+              <BusyLabel busy={batchMintBusy} idle="Prepare next row" busyLabel="Preparing…" />
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => void prepareAllBatchRows()}
+              disabled={!verified || batchPrepAllBusy || batchMintBusy || activeBatchId == null}
+              title="Prepare all remaining rows sequentially"
+              aria-busy={batchPrepAllBusy}
+            >
+              <BusyLabel busy={batchPrepAllBusy} idle="Prepare all rows" busyLabel="Preparing all…" />
+            </button>
+            <button
+              type="button"
+              onClick={() => void signBatchMintAuthorization()}
+              disabled={!batchCanSign || batchSignBusy || activeBatchId == null}
+              aria-busy={batchSignBusy}
+            >
+              <BusyLabel busy={batchSignBusy} idle="Sign batch authorization" busyLabel="Signing…" />
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => void executeBatchMints()}
+              disabled={!verified || batchExecBusy || activeBatchId == null}
+              aria-busy={batchExecBusy}
+            >
+              <BusyLabel busy={batchExecBusy} idle="Execute batch mints" busyLabel="Executing…" />
             </button>
             <button
               type="button"
@@ -1054,10 +1593,11 @@ export function UniversityPage() {
                     <th>Student</th>
                     <th>Status</th>
                     <th>Token</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {queueRows.map((r) => (
+                  {queuePg.pageItems.map((r) => (
                     <tr key={r.id}>
                       <td>{r.row_index + 1}</td>
                       <td className="mono small">{r.cert_id || "—"}</td>
@@ -1066,15 +1606,134 @@ export function UniversityPage() {
                         <span className={`status ${r.row_status}`}>{r.row_status}</span>
                       </td>
                       <td className="mono small">{r.token_id ?? "—"}</td>
+                      <td>
+                        <div className="row" style={{ flexWrap: "wrap", gap: "0.35rem", alignItems: "center" }}>
+                          <button
+                            type="button"
+                            className="btn-text"
+                            onClick={() => {
+                              setBatchAiRowId(r.id);
+                              setBatchAiText(null);
+                              setBatchAiErr(null);
+                              setBatchAiModel(null);
+                            }}
+                          >
+                            AI QA
+                          </button>
+                          {r.row_status === "prepared" ? (
+                            <button
+                              type="button"
+                              className="btn-text"
+                              onClick={() => void clearPrepareForActiveBatchRow(r.id)}
+                              disabled={batchMintBusy}
+                            >
+                              Clear prepare
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              <TablePagination
+                page={queuePg.page}
+                pageSize={queuePg.pageSize}
+                totalPages={queuePg.totalPages}
+                total={queuePg.total}
+                from={queuePg.from}
+                to={queuePg.to}
+                onPageChange={queuePg.setPage}
+                onPageSizeChange={queuePg.setPageSize}
+              />
+              {activeBatchId != null && batchAiRowId != null && (
+                <div className="ai-summary" style={{ marginTop: "1rem" }}>
+                  <div className="ai-summary__details" style={{ cursor: "default" }}>
+                    <div className="ai-summary__summary" style={{ cursor: "default", marginBottom: "0.35rem" }}>
+                      <span className="ai-summary__title">
+                        <span className="ai-summary__title-icon" aria-hidden>
+                          ✦
+                        </span>{" "}
+                        Batch row QA (AI)
+                      </span>
+                      <span className="ai-summary__badge">AI · ADVISORY</span>
+                    </div>
+                    <p className="ai-summary__disclaimer" style={{ marginTop: 0 }}>
+                      <em>
+                        Advisory only. TruCert validation and on-chain rules are authoritative. Email and internal student IDs are
+                        not sent to the model.
+                      </em>
+                    </p>
+                    {(() => {
+                      const sel = queueRows.find((x) => x.id === batchAiRowId);
+                      if (!sel) {
+                        return <p className="muted-inline small">Row not loaded — refresh rows.</p>;
+                      }
+                      return (
+                        <div className="panel" style={{ margin: "0 0 0.75rem", padding: "0.65rem 0.75rem" }}>
+                          <p className="muted-inline small" style={{ margin: 0 }}>
+                            Row <strong>{sel.row_index + 1}</strong> · <span className="mono small">{sel.cert_id || "—"}</span> ·{" "}
+                            <span className={`status ${sel.row_status}`}>{sel.row_status}</span>
+                          </p>
+                          <p className="muted-inline small" style={{ margin: "0.35rem 0 0" }}>
+                            {sel.student_full_name || "—"} · {sel.degree_title || "—"} · issued {sel.issue_date || "—"}
+                          </p>
+                        </div>
+                      );
+                    })()}
+                    <label htmlFor="batch_ai_q" className="muted-inline small" style={{ display: "block", marginBottom: "0.35rem" }}>
+                      Optional question (e.g. &quot;Does this date look wrong?&quot;)
+                    </label>
+                    <textarea
+                      id="batch_ai_q"
+                      className="inst-field"
+                      style={{ width: "100%", minHeight: "4rem", marginBottom: "0.65rem" }}
+                      value={batchAiQuestion}
+                      onChange={(e) => setBatchAiQuestion(e.target.value)}
+                      maxLength={500}
+                      placeholder="Optional — leave blank for a general consistency check"
+                    />
+                    <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+                      <button type="button" onClick={() => void runBatchRowAi()} disabled={batchAiBusy || !verified} aria-busy={batchAiBusy}>
+                        <BusyLabel busy={batchAiBusy} idle="Run AI check" busyLabel="Checking…" />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          setBatchAiRowId(null);
+                          setBatchAiText(null);
+                          setBatchAiErr(null);
+                          setBatchAiModel(null);
+                        }}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    {batchAiErr && <div className="error" style={{ marginTop: "0.65rem" }}>{batchAiErr}</div>}
+                    {batchAiText && (
+                      <div className="ai-summary__body" style={{ marginTop: "0.75rem", borderTop: "1px solid rgba(58, 74, 110, 0.35)", paddingTop: "0.65rem" }}>
+                        <p className="ai-summary__text" style={{ margin: 0 }}>
+                          {batchAiText}
+                        </p>
+                        {batchAiModel && (
+                          <p className="ai-summary__meta" style={{ marginTop: "0.65rem" }}>
+                            Model: <code>{batchAiModel}</code>
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
       </section>
+      )}
 
+      {mode === "audit" && (
+      <>
       <section className="panel">
         <h2 className="subhead">Claim (transfer to student &amp; lock)</h2>
         <p className="muted-inline">
@@ -1082,144 +1741,199 @@ export function UniversityPage() {
         </p>
         <form className="stack" onSubmit={claim}>
           <div className="row two-col">
-            <div>
+            <div className="inst-field">
               <label htmlFor="claim_tid">Token ID</label>
-              <input
-                id="claim_tid"
-                value={claimTid}
-                onChange={(e) => setClaimTid(e.target.value)}
-                required
-              />
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  #
+                </span>
+                <input
+                  id="claim_tid"
+                  value={claimTid}
+                  onChange={(e) => setClaimTid(e.target.value)}
+                  required
+                />
+              </div>
             </div>
-            <div>
-              <label htmlFor="stu">Student wallet (0x…)</label>
-              <input
-                id="stu"
-                className="mono"
-                value={studentWallet}
-                onChange={(e) => setStudentWallet(e.target.value)}
-                required
-              />
+            <div className="inst-field">
+              <label htmlFor="stu">Recipient wallet</label>
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  ⧉
+                </span>
+                <input
+                  id="stu"
+                  className="mono"
+                  value={studentWallet}
+                  onChange={(e) => setStudentWallet(e.target.value)}
+                  placeholder="0x…"
+                  required
+                />
+              </div>
             </div>
           </div>
           {claimErr && <div className="error">{claimErr}</div>}
           {claimMsg && <div className="success">{claimMsg}</div>}
-          <button type="submit" disabled={claimBusy || !verified || !canUseChain}>
-            {claimBusy ? "Claiming…" : "Claim & lock (soulbound)"}
+          <button type="submit" disabled={claimBusy || !verified || !canUseChain} aria-busy={claimBusy}>
+            <BusyLabel busy={claimBusy} idle="Claim & lock (soulbound)" busyLabel="Claiming…" />
           </button>
         </form>
       </section>
 
-      <section className="panel">
-        <h2 className="subhead">Revoke certificate</h2>
-        <form className="stack" onSubmit={revoke}>
-          <div>
-            <label htmlFor="revoke_tid">Token ID</label>
-            <input
-              id="revoke_tid"
-              value={revokeTid}
-              onChange={(e) => setRevokeTid(e.target.value)}
-              required
-            />
-          </div>
-          {revokeErr && <div className="error">{revokeErr}</div>}
-          {revokeMsg && <div className="success">{revokeMsg}</div>}
-          <button
-            type="submit"
-            className="btn-secondary"
-            disabled={revokeBusy || !verified || !canUseChain}
-          >
-            {revokeBusy ? "Revoking…" : "Revoke on-chain"}
-          </button>
-        </form>
-      </section>
+      <div className="inst-revoke-burn-row">
+        <section className="panel">
+          <h2 className="subhead">Revoke certificate</h2>
+          <form className="stack" onSubmit={revoke}>
+            <div className="inst-field">
+              <label htmlFor="revoke_tid">Token ID</label>
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  #
+                </span>
+                <input
+                  id="revoke_tid"
+                  value={revokeTid}
+                  onChange={(e) => setRevokeTid(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            {revokeErr && <div className="error">{revokeErr}</div>}
+            {revokeMsg && <div className="success">{revokeMsg}</div>}
+            <button
+              type="submit"
+              className="btn-secondary"
+              disabled={revokeBusy || !verified || !canUseChain}
+              aria-busy={revokeBusy}
+            >
+              <BusyLabel busy={revokeBusy} idle="Revoke on-chain" busyLabel="Revoking…" />
+            </button>
+          </form>
+        </section>
 
-      <section className="panel">
-        <h2 className="subhead">Burn revoked certificate</h2>
-        <form className="stack" onSubmit={burn}>
-          <div>
-            <label htmlFor="burn_tid">Token ID</label>
-            <input
-              id="burn_tid"
-              value={burnTid}
-              onChange={(e) => setBurnTid(e.target.value)}
-              required
-            />
-          </div>
-          {burnErr && <div className="error">{burnErr}</div>}
-          {burnMsg && <div className="success">{burnMsg}</div>}
-          <button type="submit" className="btn-secondary" disabled={burnBusy || !verified || !canUseChain}>
-            {burnBusy ? "Burning…" : "Burn token"}
-          </button>
-        </form>
-      </section>
+        <section className="panel">
+          <h2 className="subhead">Burn revoked certificate</h2>
+          <form className="stack" onSubmit={burn}>
+            <div className="inst-field">
+              <label htmlFor="burn_tid">Token ID</label>
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  #
+                </span>
+                <input
+                  id="burn_tid"
+                  value={burnTid}
+                  onChange={(e) => setBurnTid(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            {burnErr && <div className="error">{burnErr}</div>}
+            {burnMsg && <div className="success">{burnMsg}</div>}
+            <button type="submit" className="btn-secondary" disabled={burnBusy || !verified || !canUseChain} aria-busy={burnBusy}>
+              <BusyLabel busy={burnBusy} idle="Burn token" busyLabel="Burning…" />
+            </button>
+          </form>
+        </section>
+      </div>
 
       <section className="panel">
         <h2 className="subhead">Reissue certificate (revoke + new token)</h2>
         <form className="stack" onSubmit={reissue}>
           <div className="row two-col">
-            <div>
+            <div className="inst-field">
               <label htmlFor="reissue_old">Old token ID</label>
-              <input
-                id="reissue_old"
-                value={reissueOldTid}
-                onChange={(e) => setReissueOldTid(e.target.value)}
-                required
-              />
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  #
+                </span>
+                <input
+                  id="reissue_old"
+                  value={reissueOldTid}
+                  onChange={(e) => setReissueOldTid(e.target.value)}
+                  required
+                />
+              </div>
             </div>
-            <div>
-              <label htmlFor="reissue_cert_id">New cert ID</label>
-              <input
-                id="reissue_cert_id"
-                value={reissueCertId}
-                onChange={(e) => setReissueCertId(e.target.value)}
-                required
-              />
+            <div className="inst-field">
+              <label htmlFor="reissue_cert_id">New certificate ID</label>
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  🏷
+                </span>
+                <input
+                  id="reissue_cert_id"
+                  value={reissueCertId}
+                  onChange={(e) => setReissueCertId(e.target.value)}
+                  required
+                />
+              </div>
             </div>
           </div>
           <div className="row two-col">
-            <div>
-              <label htmlFor="reissue_student">Student name</label>
-              <input
-                id="reissue_student"
-                value={reissueStudentName}
-                onChange={(e) => setReissueStudentName(e.target.value)}
-                required
-              />
+            <div className="inst-field">
+              <label htmlFor="reissue_student">Student full name</label>
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  👤
+                </span>
+                <input
+                  id="reissue_student"
+                  value={reissueStudentName}
+                  onChange={(e) => setReissueStudentName(e.target.value)}
+                  required
+                />
+              </div>
             </div>
-            <div>
-              <label htmlFor="reissue_degree">Degree type</label>
-              <input
-                id="reissue_degree"
-                value={reissueDegreeType}
-                onChange={(e) => setReissueDegreeType(e.target.value)}
-                required
-              />
+            <div className="inst-field">
+              <label htmlFor="reissue_degree">Degree program</label>
+              <div className="inst-input-wrap">
+                <span className="inst-input-icon" aria-hidden>
+                  🎓
+                </span>
+                <input
+                  id="reissue_degree"
+                  value={reissueDegreeType}
+                  onChange={(e) => setReissueDegreeType(e.target.value)}
+                  required
+                />
+              </div>
             </div>
           </div>
-          <div>
+          <div className="inst-field">
             <label htmlFor="reissue_date">Issue date</label>
-            <input
-              id="reissue_date"
-              value={reissueIssueDate}
-              onChange={(e) => setReissueIssueDate(e.target.value)}
-              placeholder="e.g. 2026-04-10"
-              required
-            />
+            <div className="inst-input-wrap">
+              <span className="inst-input-icon" aria-hidden>
+                📅
+              </span>
+              <input
+                id="reissue_date"
+                value={reissueIssueDate}
+                onChange={(e) => setReissueIssueDate(e.target.value)}
+                placeholder="YYYY-MM-DD"
+                required
+              />
+            </div>
           </div>
           {reissueErr && <div className="error">{reissueErr}</div>}
           {reissueMsg && <div className="success">{reissueMsg}</div>}
-          <button type="submit" disabled={reissueBusy || !verified || !canUseChain}>
-            {reissueBusy ? "Reissuing…" : "Revoke and reissue"}
+          <button type="submit" disabled={reissueBusy || !verified || !canUseChain} aria-busy={reissueBusy}>
+            <BusyLabel busy={reissueBusy} idle="Revoke and reissue" busyLabel="Reissuing…" />
           </button>
         </form>
       </section>
 
-      <section className="panel">
+      <section className="panel panel-busy-anchor">
+        {eventsBusy && (
+          <div className="panel-busy-overlay" role="status" aria-live="polite">
+            <BrandedLoader size="md" />
+            <span className="panel-busy-overlay__text">Syncing on-chain activity…</span>
+          </div>
+        )}
         <h2 className="subhead">Activity log</h2>
         <div className="row">
-          <button type="button" onClick={() => void syncAndRefreshActivity()} disabled={eventsBusy || !verified}>
-            {eventsBusy ? "Refreshing…" : "Sync and refresh"}
+          <button type="button" onClick={() => void syncAndRefreshActivity()} disabled={eventsBusy || !verified} aria-busy={eventsBusy}>
+            <BusyLabel busy={eventsBusy} idle="Sync and refresh" busyLabel="Refreshing…" />
           </button>
         </div>
         {eventsErr && <div className="error">{eventsErr}</div>}
@@ -1237,7 +1951,7 @@ export function UniversityPage() {
                 </tr>
               </thead>
               <tbody>
-                {events.map((ev, i) => (
+                {eventsPg.pageItems.map((ev, i) => (
                   <tr key={`${ev.token_id ?? "x"}-${ev.created_at ?? ""}-${ev.action}-${i}`}>
                     <td>{ACTION_LABELS[ev.action] || ev.action}</td>
                     <td>{ev.token_id ?? "—"}</td>
@@ -1261,9 +1975,28 @@ export function UniversityPage() {
                 ))}
               </tbody>
             </table>
+            <TablePagination
+              page={eventsPg.page}
+              pageSize={eventsPg.pageSize}
+              totalPages={eventsPg.totalPages}
+              total={eventsPg.total}
+              from={eventsPg.from}
+              to={eventsPg.to}
+              onPageChange={eventsPg.setPage}
+              onPageSizeChange={eventsPg.setPageSize}
+            />
           </div>
         )}
       </section>
+      </>
+      )}
+
+      </div>
+
+      <InstitutionBottomNav
+        active={mode}
+        hrefFor={(k) => (k === "audit" ? "/university/risk" : `/university?mode=${k}`)}
+      />
     </>
   );
 }

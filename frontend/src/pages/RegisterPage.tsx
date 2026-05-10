@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { BusyLabel } from "../components/LoadingSpinner";
 import { apiJson } from "../api/client";
 
 export function RegisterPage() {
@@ -196,8 +197,8 @@ export function RegisterPage() {
           </div>
           {err && <div className="error">{err}</div>}
           {ok && <div className="success">{ok}</div>}
-          <button type="submit" disabled={busy}>
-            {busy ? "Submitting…" : "Submit registration"}
+          <button type="submit" disabled={busy} aria-busy={busy}>
+            <BusyLabel busy={busy} idle="Submit registration" busyLabel="Submitting…" />
           </button>
         </form>
         <p className="muted-inline">
