@@ -62,6 +62,21 @@ export async function apiJson<T>(path: string, options: ApiOptions = {}): Promis
 }
 
 /** Authenticated GET for binary or non-JSON responses (e.g. CSV export). */
+/** POST multipart (no Content-Type header — browser sets boundary). Auth header when logged in. */
+export async function apiFormData<T>(path: string, form: FormData, options: { method?: string } = {}): Promise<T> {
+  const method = options.method ?? "POST";
+  const headers: Record<string, string> = {};
+  const token = getStoredToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${API_BASE}${path}`, { method, headers, body: form });
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) {
+    const msg = data.error || res.statusText || "Request failed";
+    throw new Error(msg);
+  }
+  return data as T;
+}
+
 export async function apiDownload(path: string): Promise<{ blob: Blob; filename: string }> {
   const token = getStoredToken();
   const headers: Record<string, string> = {};

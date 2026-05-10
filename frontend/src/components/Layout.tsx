@@ -24,7 +24,11 @@ export function Layout() {
   const isWideShell =
     loc.pathname === "/" ||
     loc.pathname === "/verify" ||
+    loc.pathname === "/claim" ||
+    loc.pathname === "/admin" ||
     loc.pathname.startsWith("/admin/analytics") ||
+    loc.pathname.startsWith("/admin/overview") ||
+    loc.pathname.startsWith("/admin/risk") ||
     loc.pathname.startsWith("/university/analytics") ||
     loc.pathname === "/university/risk" ||
     loc.pathname === "/university/overview";
@@ -56,6 +60,7 @@ export function Layout() {
   const [sidebarWalletChainId, setSidebarWalletChainId] = useState<number | null>(null);
   const [sidebarWalletErr, setSidebarWalletErr] = useState<string | null>(null);
   const [sidebarWalletBusy, setSidebarWalletBusy] = useState(false);
+  const [institutionPortalFrozen, setInstitutionPortalFrozen] = useState(false);
 
   const authed = Boolean(token);
   const universityIssuerMode = Boolean(token && role === "university");
@@ -112,6 +117,25 @@ export function Layout() {
       // Non-blocking
     }
   }
+
+  useEffect(() => {
+    if (!token || role !== "university") {
+      setInstitutionPortalFrozen(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const me = await apiJson<{ is_frozen?: boolean }>("/api/university/me");
+        if (!cancelled) setInstitutionPortalFrozen(Boolean(me.is_frozen));
+      } catch {
+        if (!cancelled) setInstitutionPortalFrozen(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, role, loc.pathname]);
 
   useEffect(() => {
     if (!authed) {
@@ -270,14 +294,26 @@ export function Layout() {
 
         <nav className="app-sidebar__nav" aria-label="Primary">
           <ul className="app-sidebar__list">
-            <li>
-              <NavLink to="/verify" className={({ isActive }) => sidebarNavClass(isActive)} onClick={() => setSidebarOpen(false)}>
-                <span className="app-sidebar__icon" aria-hidden>
-                  ◎
-                </span>
-                <span className="app-sidebar__label">Verify</span>
-              </NavLink>
-            </li>
+            {role !== "admin" && (
+              <>
+                <li>
+                  <NavLink to="/verify" className={({ isActive }) => sidebarNavClass(isActive)} onClick={() => setSidebarOpen(false)}>
+                    <span className="app-sidebar__icon" aria-hidden>
+                      ◎
+                    </span>
+                    <span className="app-sidebar__label">Verify</span>
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink to="/claim" className={({ isActive }) => sidebarNavClass(isActive)} onClick={() => setSidebarOpen(false)}>
+                    <span className="app-sidebar__icon" aria-hidden>
+                      ↗
+                    </span>
+                    <span className="app-sidebar__label">Claim</span>
+                  </NavLink>
+                </li>
+              </>
+            )}
 
             {!token && (
               <>
@@ -372,6 +408,18 @@ export function Layout() {
             {token && role === "admin" && (
               <>
                 <li>
+                  <NavLink
+                    to="/admin/overview"
+                    className={({ isActive }) => sidebarNavClass(isActive)}
+                    onClick={() => setSidebarOpen(false)}
+                  >
+                    <span className="app-sidebar__icon" aria-hidden>
+                      ⊞
+                    </span>
+                    <span className="app-sidebar__label">Overview</span>
+                  </NavLink>
+                </li>
+                <li>
                   <NavLink to="/admin" className={({ isActive }) => sidebarNavClass(isActive)} onClick={() => setSidebarOpen(false)}>
                     <span className="app-sidebar__icon" aria-hidden>
                       ⚡
@@ -389,6 +437,18 @@ export function Layout() {
                       ▤
                     </span>
                     <span className="app-sidebar__label">Analytics</span>
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink
+                    to="/admin/risk"
+                    className={({ isActive }) => sidebarNavClass(isActive)}
+                    onClick={() => setSidebarOpen(false)}
+                  >
+                    <span className="app-sidebar__icon" aria-hidden>
+                      🛡
+                    </span>
+                    <span className="app-sidebar__label">Risk</span>
                   </NavLink>
                 </li>
               </>
@@ -430,9 +490,11 @@ export function Layout() {
             )}
           </div>
 
-          <Link to="/verify" className="app-sidebar__cta" onClick={() => setSidebarOpen(false)}>
-            New verification
-          </Link>
+          {role !== "admin" && (
+            <Link to="/verify" className="app-sidebar__cta" onClick={() => setSidebarOpen(false)}>
+              New verification
+            </Link>
+          )}
           {token && (
             <button type="button" className="app-sidebar__logout" onClick={() => logout()}>
               Log out
@@ -520,6 +582,11 @@ export function Layout() {
         </header>
 
         <div className={`app-sidebar-main__content${isWideShell ? " app-sidebar-main__content--wide" : ""}`}>
+          {institutionPortalFrozen && loc.pathname.startsWith("/university") && (
+            <div className="institution-freeze-banner" role="alert">
+              Account frozen — issuance disabled. Contact platform support.
+            </div>
+          )}
           <Outlet />
         </div>
       </div>

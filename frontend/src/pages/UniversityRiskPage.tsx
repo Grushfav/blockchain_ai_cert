@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../AuthContext";
 import { apiJson } from "../api/client";
 import { BusyLabel } from "../components/LoadingSpinner";
-import { InstitutionBottomNav } from "../components/InstitutionBottomNav";
+import { InstitutionBottomNav, institutionPortalHref } from "../components/InstitutionBottomNav";
 
 type RiskHintsPayload = {
   computed_at: string;
@@ -184,16 +184,13 @@ export function UniversityRiskPage() {
         )}
 
         <p className="risk-page__footer-links muted-inline small">
-          <Link to="/university?mode=audit">← Back to portal (audit &amp; lifecycle)</Link>
+          <Link to="/university?mode=actions">← Back to portal (actions)</Link>
           {" · "}
           <Link to="/university/analytics">Institution dashboard</Link>
         </p>
       </section>
 
-      <InstitutionBottomNav
-        active="audit"
-        hrefFor={(k) => (k === "audit" ? "/university/risk" : `/university?mode=${k}`)}
-      />
+      <InstitutionBottomNav active={null} hrefFor={institutionPortalHref} />
     </div>
   );
 }

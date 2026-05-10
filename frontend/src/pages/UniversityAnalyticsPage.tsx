@@ -3,7 +3,15 @@ import { Link } from "react-router-dom";
 import { apiJson } from "../api/client";
 import { TablePagination } from "../components/TablePagination";
 import { usePagination } from "../hooks/usePagination";
+import { MintHeatmapGrid, MintTimeseriesLineChart } from "../components/MintAnalyticsCharts";
 import { institutionLogoDisplayUrl } from "../utils/institutionLogo";
+
+function formatDurationMs(ms: number | null | undefined): string {
+  if (ms == null || ms < 0 || Number.isNaN(ms)) return "—";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  const s = ms / 1000;
+  return s < 60 ? `${s.toFixed(1)} s` : `${(s / 60).toFixed(1)} min`;
+}
 
 type MeStrip = {
   name: string;
@@ -42,6 +50,26 @@ type Summary = {
     single_mints_completed_via_request_table: number;
   };
   mint_batches: { total: number; by_status: Record<string, number> };
+  mint_timing?: {
+    note: string;
+    pooled_avg_platform_mint_ms: number | null;
+    pooled_sample_count: number;
+    single_mint: {
+      sample_count: number;
+      avg_platform_mint_ms: number | null;
+      last: {
+        platform_mint_ms: number;
+        completed_at_utc: string | null;
+        cert_id: string;
+      } | null;
+    };
+    batch_row_mint: { sample_count: number; avg_platform_mint_ms: number | null };
+    last_batch_execute_chunk: {
+      batch_id: number;
+      last_execute_chunk_wall_ms: number;
+      batch_updated_at_utc: string | null;
+    } | null;
+  };
 };
 
 type RecentEvent = {
@@ -75,6 +103,20 @@ type BatchListResponse = { total: number; limit: number; offset: number; batches
 
 type DashTab = "metrics" | "activity" | "batches";
 
+type MintTimeseriesResponse = {
+  timezone: string;
+  days: number;
+  series: { date: string; count: number }[];
+  total_mints: number;
+};
+
+type MintHeatmapResponse = {
+  timezone: string;
+  days: number;
+  cells: { weekday: number; hour: number; count: number }[];
+  weekday_note?: string;
+};
+
 type BatchDetail = BatchListItem & {
   rows: Array<{
     id: number;
@@ -102,6 +144,15 @@ export function UniversityAnalyticsPage() {
   const [me, setMe] = useState<MeStrip | null>(null);
   const [dashTab, setDashTab] = useState<DashTab>("metrics");
   const [logoFailed, setLogoFailed] = useState(false);
+  const [mintDays, setMintDays] = useState<30 | 90>(30);
+  const [mintSeries, setMintSeries] = useState<{ date: string; count: number }[]>([]);
+  const [mintTotal, setMintTotal] = useState<number | null>(null);
+  const [mintLoading, setMintLoading] = useState(false);
+  const [mintErr, setMintErr] = useState<string | null>(null);
+  const [heatDays, setHeatDays] = useState<30 | 90>(90);
+  const [heatCells, setHeatCells] = useState<{ weekday: number; hour: number; count: number }[]>([]);
+  const [heatLoading, setHeatLoading] = useState(false);
+  const [heatErr, setHeatErr] = useState<string | null>(null);
 
   const recentPg = usePagination(recent, 10);
   const batchesPg = usePagination(batches, 10, batchOffset);
@@ -137,6 +188,56 @@ export function UniversityAnalyticsPage() {
     void loadRecent().catch(() => setRecent([]));
     void loadBatches(0).catch(() => setBatches([]));
   }, [loadSummary, loadRecent, loadBatches]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMintLoading(true);
+    setMintErr(null);
+    void (async () => {
+      try {
+        const m = await apiJson<MintTimeseriesResponse>(
+          `/api/university/analytics/mints-timeseries?days=${mintDays}`
+        );
+        if (!cancelled) {
+          setMintSeries(m.series || []);
+          setMintTotal(typeof m.total_mints === "number" ? m.total_mints : null);
+        }
+      } catch (e: unknown) {
+        if (!cancelled) {
+          setMintSeries([]);
+          setMintTotal(null);
+          setMintErr(e instanceof Error ? e.message : "Failed to load mint timeseries");
+        }
+      } finally {
+        if (!cancelled) setMintLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mintDays]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setHeatLoading(true);
+    setHeatErr(null);
+    void (async () => {
+      try {
+        const h = await apiJson<MintHeatmapResponse>(`/api/university/analytics/mints-heatmap?days=${heatDays}`);
+        if (!cancelled) setHeatCells(h.cells || []);
+      } catch (e: unknown) {
+        if (!cancelled) {
+          setHeatCells([]);
+          setHeatErr(e instanceof Error ? e.message : "Failed to load mint heatmap");
+        }
+      } finally {
+        if (!cancelled) setHeatLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [heatDays]);
 
   useEffect(() => {
     void apiJson<MeStrip>("/api/university/me")
@@ -300,6 +401,85 @@ export function UniversityAnalyticsPage() {
             </div>
           </section>
 
+          <section className="panel inst-dashboard-panel" aria-labelledby="inst-mint-chart-heading">
+            <div className="inst-card-head" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: "0.5rem" }}>
+              <h2 id="inst-mint-chart-heading" className="inst-card-title">
+                Mints per day (UTC)
+              </h2>
+              <div className="admin-ops-digest__tabs" role="tablist" aria-label="Mint chart window">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mintDays === 30}
+                  className={`tab ghost${mintDays === 30 ? " active" : ""}`}
+                  onClick={() => setMintDays(30)}
+                >
+                  Last 30 days
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mintDays === 90}
+                  className={`tab ghost${mintDays === 90 ? " active" : ""}`}
+                  onClick={() => setMintDays(90)}
+                >
+                  Last 90 days
+                </button>
+              </div>
+            </div>
+            <p className="muted-inline small" style={{ marginTop: 0 }}>
+              Indexed <code>issued</code> activity events; bucket date is UTC from block time or record time. Axes labeled
+              UTC.
+            </p>
+            {mintErr && <div className="error">{mintErr}</div>}
+            {mintLoading && !mintErr && <p className="muted-inline">Loading chart…</p>}
+            {!mintLoading && !mintErr && mintSeries.length > 0 && (
+              <>
+                <p className="muted-inline small" style={{ marginBottom: "0.35rem" }}>
+                  Total in window: <strong>{mintTotal ?? mintSeries.reduce((a, p) => a + p.count, 0)}</strong> mints
+                </p>
+                <MintTimeseriesLineChart series={mintSeries} height={mintDays === 90 ? 280 : 260} />
+              </>
+            )}
+            {!mintLoading && !mintErr && mintSeries.length === 0 && (
+              <p className="muted-inline">No indexed mints in this UTC window.</p>
+            )}
+          </section>
+
+          <section className="panel inst-dashboard-panel" aria-labelledby="inst-mint-heat-heading">
+            <div className="inst-card-head" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: "0.5rem" }}>
+              <h2 id="inst-mint-heat-heading" className="inst-card-title">
+                Mint timing heatmap (UTC)
+              </h2>
+              <div className="admin-ops-digest__tabs" role="tablist" aria-label="Heatmap window">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={heatDays === 30}
+                  className={`tab ghost${heatDays === 30 ? " active" : ""}`}
+                  onClick={() => setHeatDays(30)}
+                >
+                  30d
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={heatDays === 90}
+                  className={`tab ghost${heatDays === 90 ? " active" : ""}`}
+                  onClick={() => setHeatDays(90)}
+                >
+                  90d
+                </button>
+              </div>
+            </div>
+            <p className="muted-inline small" style={{ marginTop: 0 }}>
+              Weekday × hour of day for indexed mints. Rows Mon→Sun; columns hour UTC (0–23).
+            </p>
+            {heatErr && <div className="error">{heatErr}</div>}
+            {heatLoading && !heatErr && <p className="muted-inline">Loading heatmap…</p>}
+            {!heatLoading && !heatErr && <MintHeatmapGrid cells={heatCells} />}
+          </section>
+
           <div className="inst-dashboard-two-col">
             <section className="panel inst-dashboard-panel">
               <div className="inst-card-head">
@@ -358,6 +538,75 @@ export function UniversityAnalyticsPage() {
               </ul>
             </section>
           </div>
+
+          {summary.mint_timing && (
+            <section className="panel inst-dashboard-panel">
+              <div className="inst-card-head">
+                <h2 className="inst-card-title">Mint timing (recorded)</h2>
+              </div>
+              <p className="muted-inline small">{summary.mint_timing.note}</p>
+              <div className="stat-cards">
+                <div className="stat-card">
+                  <span className="stat-label">Avg mint time (platform)</span>
+                  <span className="stat-value">
+                    {summary.mint_timing.pooled_avg_platform_mint_ms != null
+                      ? formatDurationMs(summary.mint_timing.pooled_avg_platform_mint_ms)
+                      : "—"}
+                  </span>
+                  <span className="muted-inline small" style={{ display: "block", marginTop: "0.25rem" }}>
+                    {summary.mint_timing.pooled_sample_count} sample
+                    {summary.mint_timing.pooled_sample_count === 1 ? "" : "s"} (single + batch rows)
+                  </span>
+                </div>
+                <div className="stat-card">
+                  <span className="stat-label">Last single mint (platform)</span>
+                  <span className="stat-value">
+                    {summary.mint_timing.single_mint.last
+                      ? formatDurationMs(summary.mint_timing.single_mint.last.platform_mint_ms)
+                      : "—"}
+                  </span>
+                  {summary.mint_timing.single_mint.last?.completed_at_utc ? (
+                    <span className="muted-inline small" style={{ display: "block", marginTop: "0.25rem" }}>
+                      {new Date(summary.mint_timing.single_mint.last.completed_at_utc).toLocaleString()}
+                      {summary.mint_timing.single_mint.last.cert_id
+                        ? ` · ${summary.mint_timing.single_mint.last.cert_id}`
+                        : ""}
+                    </span>
+                  ) : (
+                    <span className="muted-inline small" style={{ display: "block", marginTop: "0.25rem" }}>
+                      No timed single mints yet
+                    </span>
+                  )}
+                </div>
+                <div className="stat-card">
+                  <span className="stat-label">Last batch mint (execute chunk wall)</span>
+                  <span className="stat-value">
+                    {summary.mint_timing.last_batch_execute_chunk
+                      ? formatDurationMs(summary.mint_timing.last_batch_execute_chunk.last_execute_chunk_wall_ms)
+                      : "—"}
+                  </span>
+                  {summary.mint_timing.last_batch_execute_chunk ? (
+                    <span className="muted-inline small" style={{ display: "block", marginTop: "0.25rem" }}>
+                      Batch #{summary.mint_timing.last_batch_execute_chunk.batch_id}
+                      {summary.mint_timing.last_batch_execute_chunk.batch_updated_at_utc
+                        ? ` · ${new Date(summary.mint_timing.last_batch_execute_chunk.batch_updated_at_utc).toLocaleString()}`
+                        : ""}
+                    </span>
+                  ) : (
+                    <span className="muted-inline small" style={{ display: "block", marginTop: "0.25rem" }}>
+                      No timed batch executes yet
+                    </span>
+                  )}
+                </div>
+              </div>
+              <p className="muted-inline small" style={{ marginTop: "0.75rem" }}>
+                Single avg {formatDurationMs(summary.mint_timing.single_mint.avg_platform_mint_ms ?? undefined)} (
+                {summary.mint_timing.single_mint.sample_count} mints) · Batch row avg{" "}
+                {formatDurationMs(summary.mint_timing.batch_row_mint.avg_platform_mint_ms ?? undefined)} (
+                {summary.mint_timing.batch_row_mint.sample_count} rows)
+              </p>
+            </section>
+          )}
 
           <section className="panel inst-dashboard-panel">
             <div className="inst-card-head">

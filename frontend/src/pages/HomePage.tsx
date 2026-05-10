@@ -4,19 +4,7 @@ import { API_BASE } from "../api/client";
 import batchIssuanceImg from "../images/batch_issuance.png";
 import lifecycleControlsImg from "../images/lifecycle_controls.png";
 import auditLogImg from "../images/audit_log.png";
-
-type PublicKeyEntry = { kid: string; public_key_base64: string; public_key_hex: string };
-
-type PublicConfig = {
-  chain_id: number;
-  network_name: string;
-  contract_address: string | null;
-  contract_explorer_url: string | null;
-  pinata_gateway_base: string;
-  active_signing_kid: string | null;
-  trucert_public_keys: PublicKeyEntry[];
-  updated_at: string;
-};
+import type { PublicConfig } from "../types/publicConfig";
 
 type VerifiedUniversity = { name: string; internal_id: string; logo_url: string | null };
 

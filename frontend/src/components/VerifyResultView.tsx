@@ -188,60 +188,112 @@ export function VerifyResultView({ result }: { result: FieldVerifyResponse }) {
 
   const jsonPayload = useMemo(() => JSON.stringify(result, null, 2), [result]);
 
+  const statusStamp = useMemo(() => {
+    const err = (result.error || "").trim();
+    if (err) return { label: "Error", variant: "bad" as const, sub: err.slice(0, 120) };
+    if (!result.matched) return { label: "No match", variant: "neutral" as const, sub: null as string | null };
+    if (onChainRevoked) return { label: "Revoked", variant: "bad" as const, sub: null };
+    if (coreMatch === false) return { label: "Hash mismatch", variant: "bad" as const, sub: null };
+    if (sig && typeof sig.ok === "boolean" && !sig.ok) return { label: "Signature failed", variant: "bad" as const, sub: null };
+    if (onChainValid) return { label: "Verified", variant: "ok" as const, sub: locked ? "Soulbound (locked)" : null };
+    return { label: "Unknown", variant: "neutral" as const, sub: "On-chain status unclear" };
+  }, [result.error, result.matched, onChainRevoked, onChainValid, coreMatch, sig, locked]);
+
   return (
     <div className="verify-result verify-result--enter">
       <div className="verify-summary-card">
-        <div className="verify-thumb-row">
-          {certImageUrl ? (
-            <a href={certImageUrl} target="_blank" rel="noreferrer" className="verify-thumb-link">
-              <img src={certImageUrl} alt="" className="verify-thumb" />
-              <span className="verify-thumb-cap">{imageMain ? "Certificate image" : "Institution image"}</span>
-            </a>
-          ) : (
-            <div className="verify-thumb-placeholder">No image</div>
-          )}
-          {showInstThumb ? (
-            <a href={imageInstUrl} target="_blank" rel="noreferrer" className="verify-thumb-link">
-              <img src={imageInstUrl} alt="" className="verify-thumb verify-thumb-inst" />
-              <span className="verify-thumb-cap">Institution logo</span>
-            </a>
-          ) : null}
+        <div className="verify-summary-card__main">
+          <div className="verify-thumb-row">
+            {certImageUrl ? (
+              <a href={certImageUrl} target="_blank" rel="noreferrer" className="verify-thumb-link">
+                <img src={certImageUrl} alt="" className="verify-thumb" />
+                <span className="verify-thumb-cap">{imageMain ? "Certificate image" : "Institution image"}</span>
+              </a>
+            ) : (
+              <div className="verify-thumb-placeholder">No image</div>
+            )}
+            {showInstThumb ? (
+              <a href={imageInstUrl} target="_blank" rel="noreferrer" className="verify-thumb-link">
+                <img src={imageInstUrl} alt="" className="verify-thumb verify-thumb-inst" />
+                <span className="verify-thumb-cap">Institution logo</span>
+              </a>
+            ) : null}
+          </div>
+          <div className="verify-summary-text">
+            <h3 className="verify-summary-title">{asString(meta.student_full_name) || "Certificate"}</h3>
+            <p className="verify-summary-sub">{asString(meta.degree_title)}</p>
+            <p className="verify-summary-sub muted">{asString(meta.institution_name)}</p>
+            <p className="verify-summary-meta">
+              <span>
+                Cert ID: <strong>{asString(meta.cert_id) || "—"}</strong>
+              </span>
+              <span>
+                Issued: <strong>{asString(meta.issue_date) || "—"}</strong>
+              </span>
+            </p>
+          </div>
         </div>
-        <div className="verify-summary-text">
-          <h3 className="verify-summary-title">{asString(meta.student_full_name) || "Certificate"}</h3>
-          <p className="verify-summary-sub">{asString(meta.degree_title)}</p>
-          <p className="verify-summary-sub muted">{asString(meta.institution_name)}</p>
-          <p className="verify-summary-meta">
-            <span>
-              Cert ID: <strong>{asString(meta.cert_id) || "—"}</strong>
-            </span>
-            <span>
-              Issued: <strong>{asString(meta.issue_date) || "—"}</strong>
-            </span>
-          </p>
+        <div className={`verify-status-stamp verify-status-stamp--${statusStamp.variant}`} aria-live="polite">
+          <span className="verify-status-stamp__text">{statusStamp.label}</span>
+          {statusStamp.sub ? <span className="verify-status-stamp__sub">{statusStamp.sub}</span> : null}
         </div>
       </div>
 
-      <div className="verify-badges">
-        <span className={onChainValid ? "badge ok" : onChainRevoked ? "badge bad" : "badge neutral"}>
-          On-chain: {onChainValid ? "Valid" : onChainRevoked ? "Revoked" : "Unknown"}
-        </span>
-        <span className={locked ? "badge ok" : "badge neutral"}>SBT locked: {locked ? "Yes" : "No"}</span>
-        <span
-          className={
-            coreMatch === true ? "badge ok" : coreMatch === false ? "badge bad" : "badge neutral"
-          }
-          title={coreSubmitted ? `Submitted hash: 0x${coreSubmitted}` : undefined}
-        >
-          Core hash: {coreMatch === true ? "Pass" : coreMatch === false ? "Fail" : "Not checked"}
-        </span>
-        <span className={sigBadge.className} title={sig?.reason ? String(sig.reason) : undefined}>
-          TruCert signature: {sigBadge.label}
-        </span>
+      {metaErr ? (
+        <div className="verify-metadata-error">
+          <strong>Metadata could not be loaded</strong>
+          <p>{metaErr}</p>
+        </div>
+      ) : null}
+      <div className="verify-section">
+        <h4 className="verify-section-title">Verification status</h4>
+      <div className="verify-badges verify-badges--in-section">
+          <span className={onChainValid ? "badge ok" : onChainRevoked ? "badge bad" : "badge neutral"}>
+            On-chain: {onChainValid ? "Valid" : onChainRevoked ? "Revoked" : "Unknown"}
+          </span>
+          <span className={locked ? "badge ok" : "badge neutral"}>SBT locked: {locked ? "Yes" : "No"}</span>
+          <span
+            className={coreMatch === true ? "badge ok" : coreMatch === false ? "badge bad" : "badge neutral"}
+            title={coreSubmitted ? `Submitted hash: 0x${coreSubmitted}` : undefined}
+          >
+            Core hash: {coreMatch === true ? "Pass" : coreMatch === false ? "Fail" : "Not checked"}
+          </span>
+          <span className={sigBadge.className} title={sig?.reason ? String(sig.reason) : undefined}>
+            TruCert signature: {sigBadge.label}
+          </span>
+        </div>
       </div>
+      {!metaErr && (
+        <div className="verify-section">
+          <h4 className="verify-section-title">Certificate details</h4>
+          <div className="verify-kv-grid">
+            {KNOWN_META_KEYS.map(({ key, label }) => {
+              if (!(key in meta)) return null;
+              const val = asString(meta[key]);
+              if (!val) return null;
+              const isUrl = /^https?:\/\//i.test(val);
+              return (
+                <div key={key} className="kv kv-wide">
+                  <span>{label}</span>
+                  <span>
+                    {isUrl ? (
+                      <a href={val} target="_blank" rel="noreferrer">
+                        {val}
+                      </a>
+                    ) : (
+                      val
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="verify-section">
         <h4 className="verify-section-title">On-chain status</h4>
+        
         <div className="verify-kv-grid">
           <AddrLine label="Issuer" address={result.on_chain?.issuer_address || ""} />
           <AddrLine label="Owner" address={result.on_chain?.owner_address || ""} />
@@ -317,41 +369,6 @@ export function VerifyResultView({ result }: { result: FieldVerifyResponse }) {
           ) : null}
         </div>
       </div>
-
-      {metaErr ? (
-        <div className="verify-metadata-error">
-          <strong>Metadata could not be loaded</strong>
-          <p>{metaErr}</p>
-        </div>
-      ) : null}
-
-      {!metaErr && (
-        <div className="verify-section">
-          <h4 className="verify-section-title">Certificate details</h4>
-          <div className="verify-kv-grid">
-            {KNOWN_META_KEYS.map(({ key, label }) => {
-              if (!(key in meta)) return null;
-              const val = asString(meta[key]);
-              if (!val) return null;
-              const isUrl = /^https?:\/\//i.test(val);
-              return (
-                <div key={key} className="kv kv-wide">
-                  <span>{label}</span>
-                  <span>
-                    {isUrl ? (
-                      <a href={val} target="_blank" rel="noreferrer">
-                        {val}
-                      </a>
-                    ) : (
-                      val
-                    )}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {extraKeys.length > 0 && (
         <div className="verify-section">

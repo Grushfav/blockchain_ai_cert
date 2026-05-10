@@ -1,15 +1,20 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-export type InstitutionNavKey = "mint" | "batch" | "audit" | "wallet" | "settings";
+export type InstitutionNavKey = "mint" | "batch" | "actions" | "request" | "wallet" | "settings";
 
 const ITEMS: { key: InstitutionNavKey; icon: string; label: string }[] = [
   { key: "mint", icon: "⛏", label: "Mint" },
   { key: "batch", icon: "☁", label: "Batch" },
-  { key: "audit", icon: "🧾", label: "Audit" },
+  { key: "actions", icon: "⚡", label: "Actions" },
+  { key: "request", icon: "📩", label: "Request" },
   { key: "wallet", icon: "👛", label: "Wallet" },
   { key: "settings", icon: "⚙", label: "Settings" },
 ];
+
+export function institutionPortalHref(k: InstitutionNavKey): string {
+  return `/university?mode=${k}`;
+}
 
 export function InstitutionBottomNav({
   active,
@@ -54,4 +59,3 @@ export function InstitutionBottomNav({
     </nav>
   );
 }
-

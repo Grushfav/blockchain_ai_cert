@@ -55,6 +55,7 @@ def register_university_analytics_routes(bp: Blueprint) -> None:
         batch_by_status = {str(s or ""): int(n) for s, n in batch_status_rows}
 
         minted_single = int(eip_single.get("requests_by_status", {}).get("minted", 0))
+        mint_timing = analytics_service.mint_timing_summary(university_id=uni_id)
 
         uni = db.session.get(University, uni_id)
 
@@ -85,8 +86,35 @@ def register_university_analytics_routes(bp: Blueprint) -> None:
                     "total": MintBatch.query.filter_by(university_id=uni_id).count(),
                     "by_status": batch_by_status,
                 },
+                "mint_timing": mint_timing,
             }
         )
+
+    @bp.get("/university/analytics/mints-timeseries")
+    @jwt_required()
+    def university_mints_timeseries():
+        _, uni_id = _require_university()
+        raw = (request.args.get("days") or "30").strip()
+        try:
+            d = int(raw)
+        except Exception:
+            d = 30
+        if d not in (7, 30, 90):
+            d = 30
+        return jsonify(analytics_service.mint_timeseries_filled_days(university_id=uni_id, days=d))
+
+    @bp.get("/university/analytics/mints-heatmap")
+    @jwt_required()
+    def university_mints_heatmap():
+        _, uni_id = _require_university()
+        raw = (request.args.get("days") or "90").strip()
+        try:
+            d = int(raw)
+        except Exception:
+            d = 90
+        if d not in (30, 90):
+            d = 90
+        return jsonify(analytics_service.mint_heatmap_weekday_hour_utc(university_id=uni_id, days=d))
 
     @bp.get("/university/analytics/recent-activity")
     @jwt_required()

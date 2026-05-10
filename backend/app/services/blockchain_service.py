@@ -278,3 +278,30 @@ def read_certificate_public(w3: Web3, contract: Contract, token_id: int) -> dict
         "metadata_uri": uri,
         "core_hash": core_hash,
     }
+
+
+def escrow_claim_eligibility(*, token_id: int, issuer_wallet: str) -> tuple[bool, str | None]:
+    """True when the token is still escrowed with the issuer (valid, not locked, owner == issuer)."""
+    try:
+        w3 = get_w3()
+        c = get_contract(w3)
+        info = read_certificate_public(w3, c, int(token_id))
+    except Exception:
+        return False, "Could not read on-chain status; try again later."
+    if not info.get("exists"):
+        return False, "Token does not exist on-chain."
+    if not info.get("valid"):
+        return False, "This credential has been revoked on-chain."
+    if info.get("locked"):
+        return False, "This credential is already soulbound (claimed)."
+    try:
+        issuer_cs = Web3.to_checksum_address(issuer_wallet)
+        chain_issuer = Web3.to_checksum_address(info["issuer_address"])
+        owner_cs = Web3.to_checksum_address(info["owner_address"])
+    except Exception:
+        return False, "Invalid wallet or on-chain addresses."
+    if chain_issuer != issuer_cs:
+        return False, "This token was not issued by the selected institution wallet."
+    if owner_cs != issuer_cs:
+        return False, "This token is not held in the institution escrow wallet (it may already be claimed)."
+    return True, None

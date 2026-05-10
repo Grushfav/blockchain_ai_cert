@@ -26,6 +26,7 @@ from app.services import (
     notification_service,
     pinata_service,
 )
+from app.university_freeze import freeze_guard_response
 
 BATCH_ROW_AI_MAX_QUESTION_CHARS = 500
 
@@ -179,6 +180,8 @@ def _serialize_row(r: MintBatchRow) -> dict[str, Any]:
         "prepared_at": r.prepared_at.isoformat() if r.prepared_at else None,
         "minted_at": r.minted_at.isoformat() if r.minted_at else None,
         "emailed_at": r.emailed_at.isoformat() if r.emailed_at else None,
+        "prepare_to_mint_ms": r.prepare_to_mint_ms,
+        "platform_mint_ms": r.platform_mint_ms,
     }
 
 
@@ -306,6 +309,9 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         uni = user.university
         if not uni or uni.status != "verified":
             return jsonify({"error": "University is not verified"}), 403
+        fr = freeze_guard_response(uni)
+        if fr:
+            return fr
 
         f = request.files.get("file")
         if f is None or not f.filename:
@@ -471,6 +477,10 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 "valid_rows": b.valid_rows,
                 "invalid_rows": b.invalid_rows,
                 "error_summary": json.loads(b.error_summary) if b.error_summary else None,
+                "timing": {
+                    "last_execute_chunk_wall_ms": b.last_execute_chunk_wall_ms,
+                    "cumulative_execute_wall_ms": b.cumulative_execute_wall_ms,
+                },
             }
         )
 
@@ -511,6 +521,9 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         uni = user.university
         if not uni or uni.status != "verified":
             return jsonify({"error": "University is not verified"}), 403
+        fr = freeze_guard_response(uni)
+        if fr:
+            return fr
         b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
         if not b:
             return jsonify({"error": "Batch not found"}), 404
@@ -637,6 +650,9 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         uni = user.university
         if not uni or uni.status != "verified":
             return jsonify({"error": "University is not verified"}), 403
+        fr = freeze_guard_response(uni)
+        if fr:
+            return fr
         b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
         if not b:
             return jsonify({"error": "Batch not found"}), 404
@@ -809,6 +825,9 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         uni = user.university
         if not uni or uni.status != "verified":
             return jsonify({"error": "University is not verified"}), 403
+        fr = freeze_guard_response(uni)
+        if fr:
+            return fr
         b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
         if not b:
             return jsonify({"error": "Batch not found"}), 404
@@ -886,6 +905,9 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         uni = user.university
         if not uni or uni.status != "verified":
             return jsonify({"error": "University is not verified"}), 403
+        fr = freeze_guard_response(uni)
+        if fr:
+            return fr
         b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
         if not b:
             return jsonify({"error": "Batch not found"}), 404
@@ -912,6 +934,15 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         minter_addr = blockchain_service.minter_account_address()
         minted_out: list[dict[str, Any]] = []
         processed = 0
+        execute_chunk_start = time.perf_counter()
+
+        def _apply_execute_chunk_timing() -> int:
+            """Persist wall time for this execute POST (partial or full). Call before commit."""
+            cw = int((time.perf_counter() - execute_chunk_start) * 1000)
+            if processed > 0:
+                b.last_execute_chunk_wall_ms = cw
+                b.cumulative_execute_wall_ms = int(b.cumulative_execute_wall_ms or 0) + cw
+            return cw
 
         for ent in sorted(payload, key=lambda x: int(x.get("row_index", 0))):
             if processed >= max_mints:
@@ -930,6 +961,8 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             if row.row_status != "prepared":
                 return jsonify({"error": f"Row {row.row_index} is not prepared (status {row.row_status})"}), 400
 
+            prep_at_snapshot = row.prepared_at
+            chain_t0 = time.perf_counter()
             try:
                 token_id, tx_hex = blockchain_service.mint_for_issuer(
                     w3,
@@ -943,8 +976,11 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 row.row_status = "mint_failed"
                 row.error_message = str(e)
                 b.updated_at = datetime.utcnow()
+                chunk_wall_ms = _apply_execute_chunk_timing()
                 db.session.commit()
-                return jsonify({"error": f"Mint failed at row {row.row_index}: {e!s}", "partial": minted_out}), 502
+                return jsonify(
+                    {"error": f"Mint failed at row {row.row_index}: {e!s}", "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}
+                ), 502
 
             # Accept token id from chain; other mints may interleave between prepare and execute.
 
@@ -962,8 +998,9 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 row.row_status = "mint_failed"
                 row.error_message = reason
                 b.updated_at = datetime.utcnow()
+                chunk_wall_ms = _apply_execute_chunk_timing()
                 db.session.commit()
-                return jsonify({"error": reason, "partial": minted_out}), 400
+                return jsonify({"error": reason, "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}), 400
 
             try:
                 token_id_int = int(token_id)
@@ -1061,8 +1098,11 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 row.row_status = "mint_failed"
                 row.error_message = str(e)
                 b.updated_at = datetime.utcnow()
+                chunk_wall_ms = _apply_execute_chunk_timing()
                 db.session.commit()
-                return jsonify({"error": f"DB update failed at row {row.row_index}: {e!s}", "partial": minted_out}), 500
+                return jsonify(
+                    {"error": f"DB update failed at row {row.row_index}: {e!s}", "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}
+                ), 500
             row.tx_hash = tx_hex if tx_hex.startswith("0x") else "0x" + tx_hex
             row.token_id = int(token_id)
             row.minted_at = datetime.utcnow()
@@ -1098,7 +1138,26 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             else:
                 row.row_status = "mint_confirmed"
 
-            minted_out.append({"row_id": row.id, "token_id": int(token_id), "tx_hash": h})
+            platform_ms = int((time.perf_counter() - chain_t0) * 1000)
+            prep_to_mint_ms = None
+            if prep_at_snapshot and row.minted_at:
+                prep_to_mint_ms = max(0, int((row.minted_at - prep_at_snapshot).total_seconds() * 1000))
+            row.prepare_to_mint_ms = prep_to_mint_ms
+            row.platform_mint_ms = platform_ms
+
+            minted_out.append(
+                {
+                    "row_id": row.id,
+                    "token_id": int(token_id),
+                    "tx_hash": h,
+                    "timing": {
+                        # Wall time from row prepared_at (server prepare) until minted_at is set this request.
+                        "prepare_to_mint_ms": prep_to_mint_ms,
+                        # mint_for_issuer + receipt verify + DB updates + receipt scan for activity log.
+                        "platform_mint_ms": platform_ms,
+                    },
+                }
+            )
             processed += 1
 
         remaining = 0
@@ -1110,6 +1169,8 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         b.status = "executing" if b.status == "authorized" else b.status
         b.updated_at = datetime.utcnow()
         _maybe_complete_batch(b)
+
+        chunk_wall_ms = _apply_execute_chunk_timing()
 
         if minted_out:
             # In-app notifications only; keep these aggregated to avoid one-per-row noise.
@@ -1145,6 +1206,10 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 "minted": minted_out,
                 "remaining_rows": remaining,
                 "batch_status": b.status,
+                "timing": {
+                    # Wall time for this entire execute handler (all rows minted in this POST, up to commit).
+                    "chunk_wall_ms": chunk_wall_ms,
+                },
             }
         )
 
@@ -1193,6 +1258,9 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         uni = user.university
         if not uni or uni.status != "verified":
             return jsonify({"error": "University is not verified"}), 403
+        fr = freeze_guard_response(uni)
+        if fr:
+            return fr
         b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
         if not b:
             return jsonify({"error": "Batch not found"}), 404

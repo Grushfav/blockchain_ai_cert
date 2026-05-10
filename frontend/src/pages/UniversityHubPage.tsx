@@ -3,7 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../AuthContext";
 import { apiJson } from "../api/client";
 import { BusyLabel } from "../components/LoadingSpinner";
-import { InstitutionBottomNav } from "../components/InstitutionBottomNav";
+import { MintMiniBars } from "../components/MintAnalyticsCharts";
+import { InstitutionBottomNav, institutionPortalHref } from "../components/InstitutionBottomNav";
 import { institutionLogoDisplayUrl } from "../utils/institutionLogo";
 
 type Me = {
@@ -72,6 +73,11 @@ type PendingCounts = {
   rows_awaiting_preparation: number;
   mint_failed_rows: number;
   pending_single_mint_eip712: number;
+};
+
+type MintTimeseriesResponse = {
+  series: { date: string; count: number }[];
+  total_mints: number;
 };
 
 function fmtTime(iso: string | null): string {
@@ -148,6 +154,8 @@ export function UniversityHubPage() {
     { id: number; kind: string; title: string; body: string; created_at: string | null; read_at: string | null }[]
   >([]);
   const [latestTx, setLatestTx] = useState<ActivityEvent | null>(null);
+  const [mint7dSeries, setMint7dSeries] = useState<{ date: string; count: number }[]>([]);
+  const [mint7dTotal, setMint7dTotal] = useState<number | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoadErr(null);
@@ -161,6 +169,7 @@ export function UniversityHubPage() {
         pendData,
         notifData,
         actData,
+        mintTs,
       ] = await Promise.all([
         apiJson<Me>("/api/university/me"),
         apiJson<Summary>("/api/university/analytics/summary"),
@@ -169,6 +178,7 @@ export function UniversityHubPage() {
         apiJson<PendingCounts>("/api/university/hub-pending-counts"),
         apiJson<{ notifications: typeof notifs }>("/api/notifications?limit=30&offset=0"),
         apiJson<{ events: ActivityEvent[] }>("/api/university/analytics/recent-activity?limit=5"),
+        apiJson<MintTimeseriesResponse>("/api/university/analytics/mints-timeseries?days=7").catch(() => null),
       ]);
       setMe(meData);
       setSummary(sumData);
@@ -177,6 +187,13 @@ export function UniversityHubPage() {
       setPending(pendData);
       setNotifs((notifData.notifications || []).slice(0, 3));
       setLatestTx(actData.events[0] ?? null);
+      if (mintTs) {
+        setMint7dSeries(mintTs.series || []);
+        setMint7dTotal(typeof mintTs.total_mints === "number" ? mintTs.total_mints : null);
+      } else {
+        setMint7dSeries([]);
+        setMint7dTotal(null);
+      }
     } catch (caught: unknown) {
       setLoadErr(caught instanceof Error ? caught.message : "Failed to load overview");
       setMe(null);
@@ -186,6 +203,8 @@ export function UniversityHubPage() {
       setPending(null);
       setNotifs([]);
       setLatestTx(null);
+      setMint7dSeries([]);
+      setMint7dTotal(null);
     } finally {
       setBusy(false);
     }
@@ -273,6 +292,20 @@ export function UniversityHubPage() {
                   <span className="uni-hub__spark-value">{formatIssuedCount(summary.issuance_volume.activity_log_action_issued.this_month)}</span>
                 </div>
               </div>
+              {mint7dSeries.length > 0 && (
+                <div className="mint-snapshot-card">
+                  <div>
+                    <p className="mint-snapshot-card__headline">
+                      Mints last 7d (UTC):{" "}
+                      <strong>{(mint7dTotal ?? mint7dSeries.reduce((a, p) => a + p.count, 0)).toLocaleString()}</strong>
+                    </p>
+                    <p className="mint-snapshot-card__sub">One bar per UTC calendar day · indexed activity log</p>
+                  </div>
+                  <div className="mint-snapshot-card__chart">
+                    <MintMiniBars series={mint7dSeries} />
+                  </div>
+                </div>
+              )}
               <dl className="uni-hub__metric-pairs">
                 <div>
                   <dt>Indexed cert total</dt>
@@ -515,7 +548,7 @@ export function UniversityHubPage() {
               </span>
               Claim funnel
             </h2>
-            <Link to="/university?mode=audit" className="uni-hub__panel-head-link">
+            <Link to="/university?mode=actions" className="uni-hub__panel-head-link">
               Audit portal
             </Link>
           </div>
@@ -542,7 +575,7 @@ export function UniversityHubPage() {
             <p className="muted-inline">—</p>
           )}
           <p className="muted-inline small uni-hub__panel-foot">
-            <Link to="/university?mode=audit">Claim &amp; lifecycle in portal →</Link>
+            <Link to="/university?mode=actions">Claim &amp; lifecycle in portal →</Link>
           </p>
         </section>
 
@@ -595,7 +628,7 @@ export function UniversityHubPage() {
 
       <InstitutionBottomNav
         active={null}
-        hrefFor={(k) => (k === "audit" ? "/university/risk" : `/university?mode=${k}`)}
+        hrefFor={institutionPortalHref}
       />
     </div>
   );

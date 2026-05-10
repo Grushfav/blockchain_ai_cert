@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import csv
+import logging
 import io
 import json
 import os
@@ -37,8 +39,10 @@ from app.services import (
     pinata_service,
     risk_hints_service,
 )
+from app.university_freeze import freeze_guard_response
 
 bp = Blueprint("api", __name__, url_prefix="/api")
+logger = logging.getLogger(__name__)
 DEFAULT_IMAGE_CID = "bafybeihehkjcmyzvdldixinxrr3k5jj37tolozwkh3q6bw2q24rzt2o2mi"
 ACTION_VALUES = {"issued", "transferred", "revoked", "burned", "reissued"}
 GEMINI_TEST_MAX_PROMPT_CHARS = 2000
@@ -167,6 +171,184 @@ def _missing_profile_fields(uni: University) -> list[str]:
     return [k for k, v in required.items() if not (v or "").strip()]
 
 
+_HHMM_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_INST_DOC_MAX_BYTES = 15 * 1024 * 1024
+_INST_DOC_MAX_FILES = 12
+_INST_DOC_MIMES = {
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/webp",
+}
+
+
+def _load_institution_documents(uni: University) -> list[dict[str, Any]]:
+    raw = (uni.institution_documents_json or "").strip()
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _serialize_document_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    uri = (entry.get("uri") or "").strip()
+    out = {
+        "label": entry.get("label") or "Other",
+        "filename": entry.get("filename") or "",
+        "uri": uri,
+        "mime": entry.get("mime") or "",
+        "uploaded_at": entry.get("uploaded_at") or "",
+    }
+    out["url"] = _ipfs_uri_to_gateway(uri) if uri.startswith("ipfs://") else uri
+    return out
+
+
+def _parse_operating_days(raw: Any) -> list[int]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        arr = raw
+    else:
+        s = str(raw).strip()
+        if not s:
+            return []
+        arr = json.loads(s)
+    if not isinstance(arr, list):
+        raise ValueError("operating_days_of_week must be a JSON array")
+    out: list[int] = []
+    for x in arr:
+        n = int(x)
+        if n < 0 or n > 6:
+            raise ValueError("operating_days_of_week entries must be integers 0–6 (Mon–Sun)")
+        out.append(n)
+    return out
+
+
+def _parse_operational_fields(
+    data: dict[str, Any],
+    *,
+    require_monthly: bool,
+) -> dict[str, Any]:
+    """
+    Returns dict with keys:
+      expected_mints_monthly (int|None), expected_mints_annually (int|None),
+      operating_days_of_week_json (str|None), operating_hours_start/end (str|None),
+      operating_timezone (str|None)
+    """
+    em = data.get("expected_mints_monthly")
+    ea = data.get("expected_mints_annually")
+    monthly: int | None = None
+    annually: int | None = None
+    if em is not None and str(em).strip() != "":
+        monthly = int(str(em).strip())
+        if monthly < 0:
+            raise ValueError("expected_mints_monthly must be non-negative")
+    elif require_monthly:
+        raise ValueError("expected_mints_monthly is required")
+    if ea is not None and str(ea).strip() != "":
+        annually = int(str(ea).strip())
+        if annually < 0:
+            raise ValueError("expected_mints_annually must be non-negative")
+
+    days = _parse_operating_days(data.get("operating_days_of_week"))
+    h_start = (data.get("operating_hours_start") or "").strip() or None
+    h_end = (data.get("operating_hours_end") or "").strip() or None
+    tz = (data.get("operating_timezone") or "").strip() or None
+
+    if h_start and not _HHMM_RE.match(h_start):
+        raise ValueError("operating_hours_start must be HH:MM (24h)")
+    if h_end and not _HHMM_RE.match(h_end):
+        raise ValueError("operating_hours_end must be HH:MM (24h)")
+    if (h_start or h_end) and not tz:
+        raise ValueError("operating_timezone is required when operating hours are set")
+    if (h_start or h_end) and not days:
+        raise ValueError("operating_days_of_week must be non-empty when operating hours are set")
+    if tz:
+        try:
+            ZoneInfo(tz)
+        except Exception:
+            raise ValueError("operating_timezone must be a valid IANA timezone name")
+
+    days_json = json.dumps(days) if days else None
+    return {
+        "expected_mints_monthly": monthly,
+        "expected_mints_annually": annually,
+        "operating_days_of_week_json": days_json,
+        "operating_hours_start": h_start,
+        "operating_hours_end": h_end,
+        "operating_timezone": tz,
+    }
+
+
+def _apply_operational_fields(uni: University, op: dict[str, Any]) -> None:
+    uni.expected_mints_monthly = op.get("expected_mints_monthly")
+    uni.expected_mints_annually = op.get("expected_mints_annually")
+    uni.operating_days_of_week = op.get("operating_days_of_week_json")
+    uni.operating_hours_start = op.get("operating_hours_start")
+    uni.operating_hours_end = op.get("operating_hours_end")
+    uni.operating_timezone = op.get("operating_timezone")
+
+
+def _pin_institution_documents_from_uploads(
+    uploads: list[Any],
+    labels: list[str],
+) -> list[dict[str, Any]]:
+    """Pin each file to IPFS via Pinata; returns metadata dicts (requires PINATA_JWT)."""
+    if not Config.PINATA_JWT:
+        raise ValueError("PINATA_JWT is not configured; cannot store verification documents")
+    if len(uploads) > _INST_DOC_MAX_FILES:
+        raise ValueError(f"At most {_INST_DOC_MAX_FILES} documents per request")
+    out: list[dict[str, Any]] = []
+    for i, fs in enumerate(uploads):
+        mime = (fs.mimetype or "").lower()
+        if mime == "image/jpg":
+            mime = "image/jpeg"
+        if mime not in _INST_DOC_MIMES:
+            raise ValueError(f"Unsupported document type: {mime or 'unknown'} (use PDF or png/jpeg/webp)")
+        blob = fs.read()
+        if not blob:
+            raise ValueError(f"Empty upload: {fs.filename or i}")
+        if len(blob) > _INST_DOC_MAX_BYTES:
+            raise ValueError(f"Document exceeds {_INST_DOC_MAX_BYTES // (1024 * 1024)}MB: {fs.filename or i}")
+        label = labels[i] if i < len(labels) and labels[i] else "Other"
+        label = (label or "Other").strip()[:128]
+        fname = (fs.filename or f"document-{i}").strip()[:255]
+        uri = pinata_service.pin_file_bytes(fname, blob, mime, Config.PINATA_JWT)
+        out.append(
+            {
+                "label": label,
+                "filename": fname,
+                "uri": uri,
+                "mime": mime,
+                "uploaded_at": datetime.utcnow().isoformat() + "Z",
+            }
+        )
+    return out
+
+
+def _merge_registration_payload() -> tuple[dict[str, Any], list[Any], list[str]]:
+    """
+    Normalize register-university input from JSON or multipart/form-data.
+    Returns (flat_dict, file_list, label_list for files).
+    """
+    ct = (request.content_type or "").lower()
+    if "multipart/form-data" in ct:
+        d: dict[str, Any] = {}
+        for k in request.form:
+            if k == "document_labels":
+                continue
+            d[k] = request.form.get(k)
+        files = request.files.getlist("documents")
+        labels = request.form.getlist("document_labels")
+        return d, files, labels
+    data = request.get_json(silent=True) or {}
+    return data, [], []
+
+
 def _require_contract_code(w3: Web3) -> str | None:
     if not Config.TRUCERT_CONTRACT_ADDRESS:
         return "TRUCERT_CONTRACT_ADDRESS is not configured"
@@ -184,7 +366,18 @@ def _require_contract_code(w3: Web3) -> str | None:
 
 @bp.post("/auth/register-university")
 def register_university():
-    data = request.get_json(silent=True) or {}
+    """
+    Create pending university + primary university user.
+
+    Supports ``application/json`` (legacy; operational fields optional) or
+    ``multipart/form-data`` with the same scalar keys as form fields plus optional
+    ``documents`` (repeatable file inputs) and parallel ``document_labels`` entries.
+    Multipart registration requires ``expected_mints_monthly`` and full operational
+    validation when hours are provided.
+    """
+    data, upload_files, upload_labels = _merge_registration_payload()
+    is_multipart = "multipart/form-data" in (request.content_type or "").lower()
+
     required = (
         "name",
         "internal_id",
@@ -194,20 +387,20 @@ def register_university():
         "issuer_wallet_address",
     )
     for k in required:
-        if not data.get(k):
+        if not (data.get(k) if data.get(k) is not None else "").strip():
             return jsonify({"error": f"Missing field: {k}"}), 400
 
-    domain = data["domain_email"].strip().lower()
-    contact = data["contact_email"].strip().lower()
+    domain = str(data["domain_email"]).strip().lower()
+    contact = str(data["contact_email"]).strip().lower()
     if contact.split("@")[-1] != domain:
         return jsonify({"error": "Contact email must use the university domain_email"}), 400
 
     if User.query.filter_by(email=contact).first():
         return jsonify({"error": "Email already registered"}), 400
-    if University.query.filter_by(internal_id=data["internal_id"].strip()).first():
+    if University.query.filter_by(internal_id=str(data["internal_id"]).strip()).first():
         return jsonify({"error": "internal_id already used"}), 400
 
-    wallet = (data["issuer_wallet_address"] or "").strip()
+    wallet = str(data["issuer_wallet_address"]).strip()
     if not wallet.startswith("0x") or len(wallet) != 42:
         return jsonify({"error": "issuer_wallet_address must be a 0x address"}), 400
     try:
@@ -222,9 +415,16 @@ def register_university():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
+    try:
+        op = _parse_operational_fields(data, require_monthly=is_multipart)
+    except (ValueError, json.JSONDecodeError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+
+    files_clean = [f for f in upload_files if f and getattr(f, "filename", None)]
+
     uni = University(
-        name=data["name"].strip(),
-        internal_id=data["internal_id"].strip(),
+        name=str(data["name"]).strip(),
+        internal_id=str(data["internal_id"]).strip(),
         domain_email=domain,
         wallet_address=wallet,
         institution_contact_email=profile_fields["institution_contact_email"],
@@ -234,15 +434,29 @@ def register_university():
         institution_license_authority=profile_fields["institution_license_authority"],
         institution_license_valid_until=profile_fields["institution_license_valid_until"],
         status="pending",
-        kyc_notes=data.get("kyc_notes"),
+        kyc_notes=(str(data.get("kyc_notes") or "").strip() or None),
+        institution_documents_json=json.dumps([]),
     )
+    _apply_operational_fields(uni, op)
     user = User(email=contact, role="university")
-    user.set_password(data["password"])
+    user.set_password(str(data["password"]))
     user.university = uni
 
     db.session.add(uni)
     db.session.add(user)
-    db.session.commit()
+    try:
+        db.session.flush()
+        if files_clean:
+            labels = [str(x).strip() for x in upload_labels]
+            pinned = _pin_institution_documents_from_uploads(files_clean, labels)
+            uni.institution_documents_json = json.dumps(pinned)
+        db.session.commit()
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Registration failed: {e!s}"}), 502
 
     return (
         jsonify(
@@ -293,11 +507,129 @@ def list_universities():
                     "status": u.status,
                     "kyc_notes": u.kyc_notes,
                     "created_at": u.created_at.isoformat() if u.created_at else None,
+                    "is_frozen": bool(getattr(u, "is_frozen", False)),
+                    "frozen_at": u.frozen_at.isoformat() + "Z" if getattr(u, "frozen_at", None) else None,
                 }
                 for u in rows
             ]
         }
     )
+
+
+@bp.get("/admin/universities/<int:uni_id>")
+@jwt_required()
+def get_university_admin(uni_id: int):
+    """Admin review payload: profile, operational fields, document metadata (no secrets)."""
+    _require_roles("admin")
+    uni = University.query.get_or_404(uni_id)
+    try:
+        days_parsed = json.loads(uni.operating_days_of_week or "[]")
+        if not isinstance(days_parsed, list):
+            days_parsed = []
+    except Exception:
+        days_parsed = []
+    docs = [_serialize_document_entry(x) for x in _load_institution_documents(uni)]
+    return jsonify(
+        {
+            "id": uni.id,
+            "name": uni.name,
+            "internal_id": uni.internal_id,
+            "domain_email": uni.domain_email,
+            "wallet_address": uni.wallet_address,
+            "status": uni.status,
+            "kyc_notes": uni.kyc_notes,
+            "created_at": uni.created_at.isoformat() if uni.created_at else None,
+            "institution_contact_email": uni.institution_contact_email,
+            "institution_contact_phone": uni.institution_contact_phone,
+            "institution_website": uni.institution_website,
+            "institution_license_id": uni.institution_license_id,
+            "institution_license_authority": uni.institution_license_authority,
+            "institution_license_valid_until": uni.institution_license_valid_until,
+            "expected_mints_monthly": uni.expected_mints_monthly,
+            "expected_mints_annually": uni.expected_mints_annually,
+            "operating_days_of_week": days_parsed,
+            "operating_hours_start": uni.operating_hours_start,
+            "operating_hours_end": uni.operating_hours_end,
+            "operating_timezone": uni.operating_timezone,
+            "institution_documents": docs,
+            "is_frozen": bool(getattr(uni, "is_frozen", False)),
+            "frozen_reason": getattr(uni, "frozen_reason", None),
+            "frozen_at": uni.frozen_at.isoformat() + "Z" if getattr(uni, "frozen_at", None) else None,
+        }
+    )
+
+
+@bp.post("/admin/universities/<int:uni_id>/freeze")
+@jwt_required()
+def freeze_university(uni_id: int):
+    _require_roles("admin")
+    uni = University.query.get_or_404(uni_id)
+    if getattr(uni, "is_frozen", False):
+        return jsonify({"message": "Institution is already frozen", "is_frozen": True}), 200
+    data = request.get_json(silent=True) or {}
+    reason = (data.get("reason") or "").strip() or None
+    uni.is_frozen = True
+    uni.frozen_reason = reason
+    uni.frozen_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    tx = None
+    if (
+        uni.status == "verified"
+        and (Config.TRUCERT_CONTRACT_ADDRESS or "").strip()
+        and (Config.CONTRACT_OWNER_PRIVATE_KEY or "").strip()
+    ):
+        try:
+            w3 = blockchain_service.get_w3()
+            contract = blockchain_service.get_contract(w3)
+            tx = blockchain_service.set_issuer_whitelisted(w3, contract, uni.wallet_address, False)
+        except Exception as e:
+            logger.error(
+                "freeze_university: setIssuerWhitelisted(false) failed for university_id=%s: %s",
+                uni_id,
+                e,
+                exc_info=True,
+            )
+    db.session.commit()
+    return jsonify({"message": "Institution frozen", "is_frozen": True, "tx": tx})
+
+
+@bp.post("/admin/universities/<int:uni_id>/unfreeze")
+@jwt_required()
+def unfreeze_university(uni_id: int):
+    _require_roles("admin")
+    uni = University.query.get_or_404(uni_id)
+    if not getattr(uni, "is_frozen", False):
+        return jsonify({"message": "Institution is not frozen", "is_frozen": False}), 200
+    tx = None
+    if (
+        uni.status == "verified"
+        and (Config.TRUCERT_CONTRACT_ADDRESS or "").strip()
+        and (Config.CONTRACT_OWNER_PRIVATE_KEY or "").strip()
+    ):
+        try:
+            w3 = blockchain_service.get_w3()
+            contract = blockchain_service.get_contract(w3)
+            tx = blockchain_service.set_issuer_whitelisted(w3, contract, uni.wallet_address, True)
+        except Exception as e:
+            logger.error(
+                "unfreeze_university: setIssuerWhitelisted(true) failed for university_id=%s: %s",
+                uni_id,
+                e,
+                exc_info=True,
+            )
+            return (
+                jsonify(
+                    {
+                        "error": "Could not restore issuer on-chain whitelist; institution remains frozen.",
+                        "detail": str(e),
+                    }
+                ),
+                503,
+            )
+    uni.is_frozen = False
+    uni.frozen_reason = None
+    uni.frozen_at = None
+    db.session.commit()
+    return jsonify({"message": "Institution unfrozen", "is_frozen": False, "tx": tx})
 
 
 @bp.post("/admin/universities/<int:uni_id>/approve")
@@ -394,6 +726,14 @@ def university_me():
     except Exception:
         eip712_domain = None
 
+    docs = [_serialize_document_entry(x) for x in _load_institution_documents(uni)]
+    try:
+        days_parsed = json.loads(uni.operating_days_of_week or "[]")
+        if not isinstance(days_parsed, list):
+            days_parsed = []
+    except Exception:
+        days_parsed = []
+
     return jsonify(
         {
             "name": uni.name,
@@ -412,6 +752,106 @@ def university_me():
             "institution_license_id": uni.institution_license_id,
             "institution_license_authority": uni.institution_license_authority,
             "institution_license_valid_until": uni.institution_license_valid_until,
+            "expected_mints_monthly": uni.expected_mints_monthly,
+            "expected_mints_annually": uni.expected_mints_annually,
+            "operating_days_of_week": days_parsed,
+            "operating_hours_start": uni.operating_hours_start,
+            "operating_hours_end": uni.operating_hours_end,
+            "operating_timezone": uni.operating_timezone,
+            "institution_documents": docs,
+            "is_frozen": bool(getattr(uni, "is_frozen", False)),
+            "frozen_reason": getattr(uni, "frozen_reason", None),
+            "frozen_at": uni.frozen_at.isoformat() + "Z" if getattr(uni, "frozen_at", None) else None,
+        }
+    )
+
+
+def _seed_operational_from_university(uni: University) -> dict[str, Any]:
+    try:
+        days = json.loads(uni.operating_days_of_week or "[]")
+    except Exception:
+        days = []
+    if not isinstance(days, list):
+        days = []
+    return {
+        "expected_mints_monthly": uni.expected_mints_monthly,
+        "expected_mints_annually": uni.expected_mints_annually,
+        "operating_days_of_week": days,
+        "operating_hours_start": uni.operating_hours_start,
+        "operating_hours_end": uni.operating_hours_end,
+        "operating_timezone": uni.operating_timezone,
+    }
+
+
+@bp.patch("/university/me")
+@jwt_required()
+def patch_university_me():
+    """Update issuance / operating expectations (not certificate-profile fields — use PUT /profile)."""
+    _require_roles("university")
+    user = _current_user()
+    uni = user.university
+    if not uni:
+        return jsonify({"error": "No university profile"}), 400
+    g = freeze_guard_response(uni)
+    if g:
+        return g
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({"error": "No fields to update"}), 400
+    seed = _seed_operational_from_university(uni)
+    _op_patch_keys = {
+        "expected_mints_monthly",
+        "expected_mints_annually",
+        "operating_days_of_week",
+        "operating_hours_start",
+        "operating_hours_end",
+        "operating_timezone",
+    }
+    for k in _op_patch_keys:
+        if k in data:
+            seed[k] = data[k]
+    try:
+        op = _parse_operational_fields(seed, require_monthly=False)
+    except (ValueError, json.JSONDecodeError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    _apply_operational_fields(uni, op)
+    db.session.commit()
+    return jsonify({"message": "Operating profile updated."})
+
+
+@bp.post("/university/documents")
+@jwt_required()
+def upload_university_documents():
+    """
+    Append verification documents (IPFS via Pinata). Does not replace existing entries;
+    new files are merged onto ``institution_documents_json``. Requires PINATA_JWT.
+    """
+    _require_roles("university")
+    user = _current_user()
+    uni = user.university
+    if not uni:
+        return jsonify({"error": "No university profile"}), 400
+    g = freeze_guard_response(uni)
+    if g:
+        return g
+    files_clean = [f for f in request.files.getlist("documents") if f and getattr(f, "filename", None)]
+    if not files_clean:
+        return jsonify({"error": "documents file(s) required"}), 400
+    labels = [str(x).strip() for x in request.form.getlist("document_labels")]
+    existing = _load_institution_documents(uni)
+    try:
+        pinned = _pin_institution_documents_from_uploads(files_clean, labels)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Upload failed: {e!s}"}), 502
+    merged = existing + pinned
+    uni.institution_documents_json = json.dumps(merged)
+    db.session.commit()
+    return jsonify(
+        {
+            "message": f"Added {len(pinned)} document(s).",
+            "institution_documents": [_serialize_document_entry(x) for x in merged],
         }
     )
 
@@ -424,6 +864,9 @@ def update_university_profile():
     uni = user.university
     if not uni:
         return jsonify({"error": "No university profile"}), 400
+    g = freeze_guard_response(uni)
+    if g:
+        return g
     data = request.get_json(silent=True) or {}
     try:
         fields = _extract_institution_profile_fields(data)
@@ -444,6 +887,9 @@ def upload_university_logo():
     uni = user.university
     if not uni or uni.status != "verified":
         return jsonify({"error": "University is not verified"}), 403
+    g = freeze_guard_response(uni)
+    if g:
+        return g
     file = request.files.get("file")
     if file is None:
         return jsonify({"error": "file is required"}), 400
@@ -547,6 +993,9 @@ def prepare_mint_certificate():
     uni = user.university
     if not uni or uni.status != "verified":
         return jsonify({"error": "University is not verified"}), 403
+    g = freeze_guard_response(uni)
+    if g:
+        return g
 
     data = request.get_json(silent=True) or {}
     try:
@@ -627,6 +1076,9 @@ def submit_mint_authorization():
     uni = user.university
     if not uni or uni.status != "verified":
         return jsonify({"error": "University is not verified"}), 403
+    g = freeze_guard_response(uni)
+    if g:
+        return g
 
     body = request.get_json(silent=True) or {}
     mint_request_id = (body.get("mint_request_id") or "").strip()
@@ -727,6 +1179,7 @@ def submit_mint_authorization():
 
     digest = eip712_service.typed_data_signable_hash_hex(full)
 
+    chain_t0 = time.perf_counter()
     try:
         token_id, tx_hex = blockchain_service.mint_for_issuer(
             w3,
@@ -883,6 +1336,16 @@ def submit_mint_authorization():
     except Exception:
         pass
 
+    platform_mint_ms = int((time.perf_counter() - chain_t0) * 1000)
+
+    now_utc = datetime.utcnow()
+    prepare_to_complete_ms = None
+    if req.created_at:
+        prepare_to_complete_ms = max(0, int((now_utc - req.created_at).total_seconds() * 1000))
+    req.completed_at = now_utc
+    req.prepare_to_complete_ms = prepare_to_complete_ms
+    req.platform_mint_ms = platform_mint_ms
+
     notification_service.notify_university_users(
         uni.id,
         kind="mint_success",
@@ -897,6 +1360,13 @@ def submit_mint_authorization():
             "tx_hash": tx_hex,
             "mint_request_id": mint_request_id,
             "eip712_digest": digest,
+            "timing": {
+                # Wall clock from MintAuthorizationRequest.created_at (prepare-mint) until this handler finishes.
+                # Includes user wallet signing time between prepare and submit.
+                "prepare_to_complete_ms": prepare_to_complete_ms,
+                # Wall clock for mint_for_issuer + receipt read + activity log insert in this request only.
+                "platform_mint_ms": platform_mint_ms,
+            },
         }
     )
 
@@ -909,6 +1379,9 @@ def prepare_reissue(old_token_id: int):
     uni = user.university
     if not uni or uni.status != "verified":
         return jsonify({"error": "University is not verified"}), 403
+    g = freeze_guard_response(uni)
+    if g:
+        return g
 
     data = request.get_json(silent=True) or {}
     try:
@@ -1205,6 +1678,9 @@ def sync_university_activity():
         return jsonify({"error": "No university profile"}), 400
     if uni.status != "verified":
         return jsonify({"error": "University is not verified"}), 403
+    g = freeze_guard_response(uni)
+    if g:
+        return g
 
     latest_synced = (
         db.session.query(db.func.max(ActivityLog.block_number))
@@ -1862,6 +2338,7 @@ def public_verified_universities():
         {
             "universities": [
                 {
+                    "id": u.id,
                     "name": u.name,
                     "internal_id": u.internal_id,
                     "logo_url": _ipfs_uri_to_gateway(u.logo_uri) if u.logo_uri else None,

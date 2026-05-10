@@ -1,12 +1,17 @@
 import { Link, useSearchParams } from "react-router-dom";
 import { BrowserProvider, Contract, isAddress, parseUnits, type Signer } from "ethers";
+import { BatchMintProgressStepper } from "../components/BatchMintProgressStepper";
 import { BrandedLoader } from "../components/BrandedLoader";
 import { BusyLabel } from "../components/LoadingSpinner";
 import type { Eip1193Provider } from "ethers";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { API_BASE, apiJson, getStoredToken } from "../api/client";
+import { API_BASE, apiFormData, apiJson, getStoredToken } from "../api/client";
 import { TRUCERT_ABI } from "../abi/trucertAbi";
-import { InstitutionBottomNav, type InstitutionNavKey } from "../components/InstitutionBottomNav";
+import {
+  InstitutionBottomNav,
+  institutionPortalHref,
+  type InstitutionNavKey,
+} from "../components/InstitutionBottomNav";
 import { institutionLogoDisplayUrl } from "../utils/institutionLogo";
 import { TablePagination } from "../components/TablePagination";
 import { usePagination } from "../hooks/usePagination";
@@ -15,6 +20,9 @@ type Me = {
   name: string;
   internal_id: string;
   status: string;
+  is_frozen?: boolean;
+  frozen_reason?: string | null;
+  frozen_at?: string | null;
   wallet_address: string;
   contract_address: string;
   chain_id: number;
@@ -33,6 +41,20 @@ type Me = {
   institution_license_id?: string | null;
   institution_license_authority?: string | null;
   institution_license_valid_until?: string | null;
+  expected_mints_monthly?: number | null;
+  expected_mints_annually?: number | null;
+  operating_days_of_week?: number[];
+  operating_hours_start?: string | null;
+  operating_hours_end?: string | null;
+  operating_timezone?: string | null;
+  institution_documents?: Array<{
+    label: string;
+    filename: string;
+    uri: string;
+    url: string;
+    mime?: string;
+    uploaded_at?: string;
+  }>;
 };
 
 type PreparedMint = {
@@ -68,6 +90,8 @@ type BatchRow = {
   error_message: string | null;
   token_id: number | null;
   tx_hash: string | null;
+  prepare_to_mint_ms?: number | null;
+  platform_mint_ms?: number | null;
 };
 
 type ActivityEvent = {
@@ -80,6 +104,21 @@ type ActivityEvent = {
   created_at: string | null;
 };
 
+type StudentClaimReqRow = {
+  id: number;
+  token_id: number;
+  cert_id: string | null;
+  student_internal_id: string;
+  student_email: string;
+  wallet_address: string;
+  status: string;
+  rejection_reason: string | null;
+  created_at: string | null;
+  student_full_name: string | null;
+  degree_title: string | null;
+  claim_tx_hash: string | null;
+};
+
 const AMOY_PUBLIC_RPC = "https://polygon-amoy-bor-rpc.publicnode.com";
 
 const ACTION_LABELS: Record<string, string> = {
@@ -90,11 +129,30 @@ const ACTION_LABELS: Record<string, string> = {
   reissued: "reissued",
 };
 
-const MODE_KEYS = new Set<InstitutionNavKey>(["mint", "batch", "audit", "wallet", "settings"]);
+/** Modes allowed in `?mode=` on `/university` (risk dashboard: `/university/risk`, not in bottom nav). */
+const URL_MODE_KEYS = new Set<InstitutionNavKey>(["mint", "batch", "actions", "request", "wallet", "settings"]);
+
+const SETTINGS_WEEKDAYS: { value: number; label: string }[] = [
+  { value: 0, label: "Mon" },
+  { value: 1, label: "Tue" },
+  { value: 2, label: "Wed" },
+  { value: 3, label: "Thu" },
+  { value: 4, label: "Fri" },
+  { value: 5, label: "Sat" },
+  { value: 6, label: "Sun" },
+];
+
+function formatDurationMs(ms: number | null | undefined): string {
+  if (ms == null || ms < 0 || Number.isNaN(ms)) return "—";
+  if (ms < 1000) return `${ms} ms`;
+  const s = ms / 1000;
+  return s < 60 ? `${s.toFixed(1)} s` : `${(s / 60).toFixed(1)} min`;
+}
 
 function modeFromSearch(raw: string | null): InstitutionNavKey | null {
   if (!raw) return null;
-  return MODE_KEYS.has(raw as InstitutionNavKey) ? (raw as InstitutionNavKey) : null;
+  if (raw === "audit") return "actions";
+  return URL_MODE_KEYS.has(raw as InstitutionNavKey) ? (raw as InstitutionNavKey) : null;
 }
 
 export function UniversityPage() {
@@ -128,6 +186,20 @@ export function UniversityPage() {
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileErr, setProfileErr] = useState<string | null>(null);
   const [profileMsg, setProfileMsg] = useState<string | null>(null);
+  const [opMonthly, setOpMonthly] = useState("");
+  const [opAnnual, setOpAnnual] = useState("");
+  const [opDays, setOpDays] = useState<Set<number>>(() => new Set());
+  const [opStart, setOpStart] = useState("");
+  const [opEnd, setOpEnd] = useState("");
+  const [opTz, setOpTz] = useState("");
+  const [opBusy, setOpBusy] = useState(false);
+  const [opErr, setOpErr] = useState<string | null>(null);
+  const [opMsg, setOpMsg] = useState<string | null>(null);
+  const [docUploadFile, setDocUploadFile] = useState<File | null>(null);
+  const [docUploadLabel, setDocUploadLabel] = useState("Accreditation");
+  const [docBusy, setDocBusy] = useState(false);
+  const [docErr, setDocErr] = useState<string | null>(null);
+  const [docMsg, setDocMsg] = useState<string | null>(null);
   const [mintMsg, setMintMsg] = useState<string | null>(null);
   const [mintErr, setMintErr] = useState<string | null>(null);
   const [mintBusy, setMintBusy] = useState(false);
@@ -137,6 +209,10 @@ export function UniversityPage() {
   const [claimMsg, setClaimMsg] = useState<string | null>(null);
   const [claimErr, setClaimErr] = useState<string | null>(null);
   const [claimBusy, setClaimBusy] = useState(false);
+
+  const [studentClaimReqs, setStudentClaimReqs] = useState<StudentClaimReqRow[]>([]);
+  const [studentClaimReqBusy, setStudentClaimReqBusy] = useState(false);
+  const [studentClaimReqErr, setStudentClaimReqErr] = useState<string | null>(null);
 
   const [revokeTid, setRevokeTid] = useState("");
   const [revokeMsg, setRevokeMsg] = useState<string | null>(null);
@@ -163,6 +239,7 @@ export function UniversityPage() {
   const [rpcCopied, setRpcCopied] = useState(false);
 
   const [batchFile, setBatchFile] = useState<File | null>(null);
+  const [batchDropzoneKey, setBatchDropzoneKey] = useState(0);
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchErr, setBatchErr] = useState<string | null>(null);
   const [batchMsg, setBatchMsg] = useState<string | null>(null);
@@ -172,10 +249,10 @@ export function UniversityPage() {
     valid_rows: number;
     invalid_rows: number;
     status: string;
+    timing?: { last_execute_chunk_wall_ms: number | null; cumulative_execute_wall_ms: number | null };
   } | null>(null);
   const [invalidPreview, setInvalidPreview] = useState<BatchRow[]>([]);
   const [queueRows, setQueueRows] = useState<BatchRow[]>([]);
-  const [batchMintBusy, setBatchMintBusy] = useState(false);
   const [batchMintErr, setBatchMintErr] = useState<string | null>(null);
   const [batchSignBusy, setBatchSignBusy] = useState(false);
   const [batchExecBusy, setBatchExecBusy] = useState(false);
@@ -203,6 +280,12 @@ export function UniversityPage() {
       setProfileLicenseId(data.institution_license_id || "");
       setProfileLicenseAuthority(data.institution_license_authority || "");
       setProfileLicenseValidUntil(data.institution_license_valid_until || "");
+      setOpMonthly(data.expected_mints_monthly != null ? String(data.expected_mints_monthly) : "");
+      setOpAnnual(data.expected_mints_annually != null ? String(data.expected_mints_annually) : "");
+      setOpDays(new Set(Array.isArray(data.operating_days_of_week) ? data.operating_days_of_week : []));
+      setOpStart(data.operating_hours_start || "");
+      setOpEnd(data.operating_hours_end || "");
+      setOpTz(data.operating_timezone || "");
     } catch (caught: unknown) {
       setMe(null);
       setLoadErr(caught instanceof Error ? caught.message : "Failed to load profile");
@@ -217,6 +300,36 @@ export function UniversityPage() {
     const m = modeFromSearch(searchParams.get("mode"));
     setModeState(m ?? "mint");
   }, [searchParams]);
+
+  useEffect(() => {
+    const ct = searchParams.get("claimToken");
+    const cw = searchParams.get("claimWallet");
+    if (ct?.trim() && cw?.trim()) {
+      setClaimTid(ct.trim());
+      setStudentWallet(decodeURIComponent(cw.trim()));
+    }
+  }, [searchParams]);
+
+  const loadStudentClaimRequests = useCallback(async () => {
+    const tok = getStoredToken();
+    if (!tok) return;
+    setStudentClaimReqBusy(true);
+    setStudentClaimReqErr(null);
+    try {
+      const data = await apiJson<{ requests: StudentClaimReqRow[] }>("/api/university/student-claim-requests");
+      setStudentClaimReqs(data.requests || []);
+    } catch (caught: unknown) {
+      setStudentClaimReqErr(caught instanceof Error ? caught.message : "Failed to load student claim requests");
+      setStudentClaimReqs([]);
+    } finally {
+      setStudentClaimReqBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "request") return;
+    void loadStudentClaimRequests();
+  }, [mode, loadStudentClaimRequests]);
 
   const setMode = useCallback(
     (next: InstitutionNavKey) => {
@@ -239,13 +352,71 @@ export function UniversityPage() {
     return walletAddress.toLowerCase() === me.wallet_address.toLowerCase();
   }, [me, walletAddress]);
 
+  const accountFrozen = Boolean(me?.is_frozen);
+
+  function walletErrorHaystack(caught: unknown): string {
+    const parts: string[] = [];
+    const walk = (e: unknown, depth: number) => {
+      if (e == null || depth > 6) return;
+      if (typeof e === "string") {
+        parts.push(e);
+        return;
+      }
+      if (e instanceof Error) {
+        parts.push(e.message);
+        const x = e as Error & {
+          shortMessage?: string;
+          reason?: string;
+          code?: string;
+          info?: { error?: { message?: string } };
+        };
+        if (x.shortMessage) parts.push(String(x.shortMessage));
+        if (x.reason) parts.push(String(x.reason));
+        if (x.code) parts.push(String(x.code));
+        if (x.info?.error?.message) parts.push(String(x.info.error.message));
+        walk((e as Error & { error?: unknown }).error, depth + 1);
+      } else if (typeof e === "object") {
+        const o = e as Record<string, unknown>;
+        for (const k of ["message", "reason", "data"]) {
+          if (typeof o[k] === "string") parts.push(o[k] as string);
+        }
+        if (o.error) walk(o.error, depth + 1);
+      }
+    };
+    walk(caught, 0);
+    return parts.join(" ").toLowerCase();
+  }
+
   function friendlyWalletError(caught: unknown): string {
     const raw = caught instanceof Error ? caught.message : String(caught ?? "Wallet transaction failed");
-    const lower = raw.toLowerCase();
-    if (lower.includes("rate limited") || lower.includes("too many requests")) {
+    const hay = `${raw} ${walletErrorHaystack(caught)}`.toLowerCase();
+    if (hay.includes("insufficient funds")) {
+      return (
+        "This wallet does not have enough Amoy POL to pay gas. Send a small amount of test POL from a Polygon Amoy faucet " +
+        "(e.g. https://faucet.polygon.technology/ ) to your issuer address, wait for it to confirm, then retry."
+      );
+    }
+    if (hay.includes("rate limited") || hay.includes("too many requests")) {
       return (
         "Wallet RPC is rate-limited on Polygon Amoy. In MetaMask, open Polygon Amoy network settings " +
         "and switch RPC URL to https://polygon-amoy-bor-rpc.publicnode.com, then retry."
+      );
+    }
+    if (
+      hay.includes("maxpriorityfeepergas") ||
+      hay.includes("maxfeepergas") ||
+      hay.includes("eth_maxpriorityfeepergas")
+    ) {
+      return (
+        "Your RPC or wallet rejected EIP-1559 fee fields. In MetaMask → Polygon Amoy → use RPC " +
+        "https://polygon-amoy-bor-rpc.publicnode.com (or rpc-amoy.polygon.technology), then retry."
+      );
+    }
+    if (hay.includes("call_exception") && hay.includes("estimategas")) {
+      return (
+        "Gas estimation failed (no revert data from the RPC). Common causes: issuer wallet has no Amoy POL for gas; " +
+        "connected wallet is not the current NFT owner; or the token is already locked. Fund POL from an Amoy faucet, " +
+        "confirm token ownership on Polygonscan, then retry."
       );
     }
     return raw;
@@ -349,20 +520,33 @@ export function UniversityPage() {
     return signer.signTypedData(domain, types, message);
   }
 
-  async function amoyFeeOverrides(provider: BrowserProvider): Promise<{
-    maxPriorityFeePerGas: bigint;
-    maxFeePerGas: bigint;
-  }> {
+  async function amoyFeeOverrides(
+    provider: BrowserProvider
+  ): Promise<{ maxPriorityFeePerGas: bigint; maxFeePerGas: bigint } | { gasPrice: bigint }> {
     const minTip = parseUnits("30", "gwei");
-    const feeData = await provider.getFeeData();
-    const block = await provider.getBlock("latest");
-    const suggestedPriority = feeData.maxPriorityFeePerGas ?? 0n;
-    const priority = suggestedPriority > minTip ? suggestedPriority : minTip;
-    const baseFee = block?.baseFeePerGas ?? parseUnits("30", "gwei");
-    return {
-      maxPriorityFeePerGas: priority,
-      maxFeePerGas: baseFee * 2n + priority,
-    };
+    try {
+      const feeData = await provider.getFeeData();
+      const block = await provider.getBlock("latest");
+      const suggestedPriority = feeData.maxPriorityFeePerGas ?? 0n;
+      const suggestedMax = feeData.maxFeePerGas ?? 0n;
+      if (suggestedMax > 0n && suggestedPriority > 0n) {
+        const priority = suggestedPriority > minTip ? suggestedPriority : minTip;
+        const baseFee = block?.baseFeePerGas ?? parseUnits("30", "gwei");
+        return {
+          maxPriorityFeePerGas: priority,
+          maxFeePerGas: baseFee * 2n + priority,
+        };
+      }
+    } catch {
+      // Some RPCs / wallets do not implement eth_maxPriorityFeePerGas; fall back to legacy gas price.
+    }
+    try {
+      const hex = (await provider.send("eth_gasPrice", [])) as string;
+      const gasPrice = BigInt(hex);
+      return { gasPrice: gasPrice > minTip ? gasPrice : minTip };
+    } catch {
+      return { gasPrice: parseUnits("35", "gwei") };
+    }
   }
 
   async function connectWallet() {
@@ -448,12 +632,14 @@ export function UniversityPage() {
         valid_rows: number;
         invalid_rows: number;
         status: string;
+        timing?: { last_execute_chunk_wall_ms: number | null; cumulative_execute_wall_ms: number | null };
       }>(`/api/university/mint-batches/${id}`);
       setBatchSummary({
         total_rows: b.total_rows,
         valid_rows: b.valid_rows,
         invalid_rows: b.invalid_rows,
         status: b.status,
+        timing: b.timing,
       });
     } catch {
       setBatchErr("Could not refresh batch summary. Check backend is reachable.");
@@ -507,13 +693,6 @@ export function UniversityPage() {
     }
   }
 
-  function nextRowToMint(rows: BatchRow[]): BatchRow | null {
-    // For preparation we want the earliest row that is still pending (not invalid, not already prepared/minted).
-    const ok = new Set(["pending_validation", "mint_failed"]);
-    const cand = rows.filter((r) => ok.has(r.row_status)).sort((a, b) => a.row_index - b.row_index);
-    return cand[0] ?? null;
-  }
-
   async function clearBatchRowPrepare(batchId: number, rowId: number) {
     setBatchMintErr(null);
     setBatchMsg(null);
@@ -536,51 +715,6 @@ export function UniversityPage() {
   async function clearPrepareForActiveBatchRow(rowId: number) {
     if (!activeBatchId) return;
     await clearBatchRowPrepare(activeBatchId, rowId);
-  }
-
-  async function prepareNextBatchRow() {
-    setBatchMintErr(null);
-    setBatchMsg(null);
-    if (!activeBatchId || !queueRows.length) {
-      setBatchMintErr("Upload a batch first.");
-      return;
-    }
-    const next = nextRowToMint(queueRows);
-    if (!next) {
-      setBatchMsg("No rows left to prepare, or all valid rows are already minted.");
-      return;
-    }
-    if (
-      !window.confirm(
-        `Prepare row ${next.row_index + 1} on the server (IPFS metadata + indexing)?\n\nThis step runs before batch signing.`
-      )
-    ) {
-      return;
-    }
-    setBatchMintBusy(true);
-    try {
-      const token = getStoredToken();
-      const resP = await fetch(
-        `${API_BASE}/api/university/mint-batches/${activeBatchId}/rows/${next.id}/prepare`,
-        { method: "POST", headers: token ? { Authorization: `Bearer ${token}` } : {} }
-      );
-      const prepBody = (await resP.json()) as PreparedMint & { error?: string };
-      if (!resP.ok) {
-        throw new Error(prepBody.error || "Prepare failed");
-      }
-      setBatchMsg(
-        prepBody.idempotent
-          ? `Row ${next.row_index + 1} already prepared.`
-          : `Prepared row ${next.row_index + 1} (metadata pinned). Next: sign batch when all rows are prepared.`
-      );
-      await refreshQueueRows();
-      await refreshInvalidPreview();
-      await refreshBatchMeta();
-    } catch (caught: unknown) {
-      setBatchMintErr(friendlyWalletError(caught));
-    } finally {
-      setBatchMintBusy(false);
-    }
   }
 
   async function prepareAllBatchRows() {
@@ -688,28 +822,44 @@ export function UniversityPage() {
     try {
       let remaining = -1;
       for (let guard = 0; guard < 200; guard += 1) {
-        const res = await apiJson<{ remaining_rows: number; minted: { token_id: number }[]; error?: string }>(
-          `/api/university/mint-batches/${activeBatchId}/execute`,
-          { method: "POST", json: { max_mints: 40 } }
-        );
+        const res = await apiJson<{
+          remaining_rows: number;
+          minted: {
+            token_id: number;
+            row_id?: number;
+            timing?: { prepare_to_mint_ms: number | null; platform_mint_ms: number };
+          }[];
+          timing?: { chunk_wall_ms: number };
+          error?: string;
+        }>(`/api/university/mint-batches/${activeBatchId}/execute`, { method: "POST", json: { max_mints: 40 } });
         remaining = res.remaining_rows;
         await refreshQueueRows();
         await refreshBatchMeta();
         if (res.minted?.length) {
-          setBatchMsg(`Minted ${res.minted.length} certificate(s) this chunk. ${remaining} row(s) remaining.`);
+          const chunkMs = res.timing?.chunk_wall_ms;
+          const plat = res.minted
+            .map((m) => m.timing?.platform_mint_ms)
+            .filter((x): x is number => typeof x === "number" && x >= 0);
+          const avgPlat = plat.length ? Math.round(plat.reduce((a, b) => a + b, 0) / plat.length) : null;
+          let line = `Minted ${res.minted.length} certificate(s) this chunk. ${remaining} row(s) remaining.`;
+          if (chunkMs != null) line += ` Chunk (server): ${formatDurationMs(chunkMs)}.`;
+          if (avgPlat != null) line += ` Avg platform mint/row: ${formatDurationMs(avgPlat)}.`;
+          setBatchMsg(line);
         }
         if (remaining === 0) {
           setBatchMsg("Batch minting complete.");
           break;
         }
       }
-      await syncAndRefreshActivity();
-      await loadMe();
     } catch (caught: unknown) {
       setBatchMintErr(friendlyWalletError(caught));
     } finally {
       setBatchExecBusy(false);
     }
+    void (async () => {
+      await syncAndRefreshActivity();
+      await loadMe();
+    })();
   }
 
   async function downloadBatchErrorCsv() {
@@ -794,18 +944,29 @@ export function UniversityPage() {
       const { provider } = await getSignerContract();
       const signer = await provider.getSigner();
       const sig = await signEip712Envelope(signer, prepared.eip712);
-      const out = await apiJson<{ token_id: number; tx_hash: string }>(
-        "/api/university/certificates/submit-authorization",
-        { method: "POST", json: { mint_request_id: prepared.mint_request_id, signature: sig } }
-      );
-      setMintMsg(`Minted on-chain as token ${out.token_id}. Minter tx: ${out.tx_hash}`);
-      await syncAndRefreshActivity();
-      await loadMe();
+      const out = await apiJson<{
+        token_id: number;
+        tx_hash: string;
+        timing?: { prepare_to_complete_ms: number | null; platform_mint_ms: number };
+      }>("/api/university/certificates/submit-authorization", {
+        method: "POST",
+        json: { mint_request_id: prepared.mint_request_id, signature: sig },
+      });
+      const t = out.timing;
+      const timingNote =
+        t && (t.prepare_to_complete_ms != null || t.platform_mint_ms != null)
+          ? ` Timing: ${formatDurationMs(t.prepare_to_complete_ms ?? undefined)} from prepare to done (includes wallet signing); platform mint + receipt: ${formatDurationMs(t.platform_mint_ms)}.`
+          : "";
+      setMintMsg(`Minted on-chain as token ${out.token_id}. Minter tx: ${out.tx_hash}.${timingNote}`);
     } catch (caught: unknown) {
       setMintErr(friendlyWalletError(caught));
     } finally {
       setMintBusy(false);
     }
+    void (async () => {
+      await syncAndRefreshActivity();
+      await loadMe();
+    })();
   }
 
   async function claim(e: React.FormEvent) {
@@ -834,11 +995,52 @@ export function UniversityPage() {
       const tx = await contract.claim(tid, studentWallet.trim(), await amoyFeeOverrides(provider));
       const receipt = await tx.wait();
       setClaimMsg(`Claimed. Tx: ${receipt.hash}`);
-      await syncAndRefreshActivity();
     } catch (caught: unknown) {
       setClaimErr(friendlyWalletError(caught));
     } finally {
       setClaimBusy(false);
+    }
+    void (async () => {
+      await syncAndRefreshActivity();
+      await loadStudentClaimRequests();
+    })();
+  }
+
+  async function approveStudentClaimRequest(reqId: number) {
+    if (!window.confirm("Approve this student’s transfer request? You will still submit the on-chain claim from your issuer wallet.")) {
+      return;
+    }
+    try {
+      await apiJson(`/api/university/student-claim-requests/${reqId}/approve`, { method: "POST", json: {} });
+      await loadStudentClaimRequests();
+    } catch (caught: unknown) {
+      window.alert(caught instanceof Error ? caught.message : "Approve failed");
+    }
+  }
+
+  async function rejectStudentClaimRequest(reqId: number) {
+    const reason = window.prompt("Optional rejection reason (shown only in your records):") || "";
+    try {
+      await apiJson(`/api/university/student-claim-requests/${reqId}/reject`, {
+        method: "POST",
+        json: { reason: reason.trim() || undefined },
+      });
+      await loadStudentClaimRequests();
+    } catch (caught: unknown) {
+      window.alert(caught instanceof Error ? caught.message : "Reject failed");
+    }
+  }
+
+  async function completeStudentClaimRequest(reqId: number) {
+    const txh = window.prompt("Paste claim transaction hash (0x…), or leave blank to mark complete without hash:") || "";
+    try {
+      await apiJson(`/api/university/student-claim-requests/${reqId}/complete`, {
+        method: "POST",
+        json: { claim_tx_hash: txh.trim() || undefined },
+      });
+      await loadStudentClaimRequests();
+    } catch (caught: unknown) {
+      window.alert(caught instanceof Error ? caught.message : "Update failed");
     }
   }
 
@@ -864,12 +1066,12 @@ export function UniversityPage() {
       const tx = await contract.revokeCertificate(tid, await amoyFeeOverrides(provider));
       const receipt = await tx.wait();
       setRevokeMsg(`Revoked. Tx: ${receipt.hash}`);
-      await syncAndRefreshActivity();
     } catch (caught: unknown) {
       setRevokeErr(friendlyWalletError(caught));
     } finally {
       setRevokeBusy(false);
     }
+    void syncAndRefreshActivity();
   }
 
   async function burn(e: React.FormEvent) {
@@ -894,12 +1096,12 @@ export function UniversityPage() {
       const tx = await contract.burnCertificate(tid, await amoyFeeOverrides(provider));
       const receipt = await tx.wait();
       setBurnMsg(`Burned. Tx: ${receipt.hash}`);
-      await syncAndRefreshActivity();
     } catch (caught: unknown) {
       setBurnErr(friendlyWalletError(caught));
     } finally {
       setBurnBusy(false);
     }
+    void syncAndRefreshActivity();
   }
 
   async function reissue(e: React.FormEvent) {
@@ -942,12 +1144,12 @@ export function UniversityPage() {
       );
       const receipt = await tx.wait();
       setReissueMsg(`Reissued. Tx: ${receipt.hash}`);
-      await syncAndRefreshActivity();
     } catch (caught: unknown) {
       setReissueErr(friendlyWalletError(caught));
     } finally {
       setReissueBusy(false);
     }
+    void syncAndRefreshActivity();
   }
 
   const verified = me?.status === "verified";
@@ -975,6 +1177,93 @@ export function UniversityPage() {
       setProfileErr(caught instanceof Error ? caught.message : "Profile update failed");
     } finally {
       setProfileBusy(false);
+    }
+  }
+
+  function toggleSettingDay(d: number) {
+    setOpDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(d)) next.delete(d);
+      else next.add(d);
+      return next;
+    });
+  }
+
+  async function saveOperatingProfile(e: React.FormEvent) {
+    e.preventDefault();
+    setOpErr(null);
+    setOpMsg(null);
+    setOpBusy(true);
+    try {
+      const hasStart = Boolean(opStart.trim());
+      const hasEnd = Boolean(opEnd.trim());
+      if (hasStart !== hasEnd) {
+        setOpErr("Provide both operating start and end, or leave both empty.");
+        return;
+      }
+      if (hasStart && hasEnd) {
+        if (!opTz.trim()) {
+          setOpErr("Operating timezone is required when hours are set.");
+          return;
+        }
+        if (opDays.size === 0) {
+          setOpErr("Select at least one operating day when hours are set.");
+          return;
+        }
+      }
+      const monthly = opMonthly.trim() === "" ? null : Number.parseInt(opMonthly.trim(), 10);
+      if (monthly !== null && (Number.isNaN(monthly) || monthly < 0)) {
+        setOpErr("Expected mints per month must be a non-negative integer or empty.");
+        return;
+      }
+      let annually: number | null = null;
+      if (opAnnual.trim() !== "") {
+        annually = Number.parseInt(opAnnual.trim(), 10);
+        if (Number.isNaN(annually) || annually < 0) {
+          setOpErr("Expected mints annually must be a non-negative integer or empty.");
+          return;
+        }
+      }
+      await apiJson<{ message: string }>("/api/university/me", {
+        method: "PATCH",
+        json: {
+          expected_mints_monthly: monthly,
+          expected_mints_annually: annually,
+          operating_days_of_week: [...opDays].sort((a, b) => a - b),
+          operating_hours_start: opStart.trim() || null,
+          operating_hours_end: opEnd.trim() || null,
+          operating_timezone: opTz.trim() || null,
+        },
+      });
+      setOpMsg("Operating expectations updated.");
+      await loadMe();
+    } catch (caught: unknown) {
+      setOpErr(caught instanceof Error ? caught.message : "Update failed");
+    } finally {
+      setOpBusy(false);
+    }
+  }
+
+  async function uploadInstitutionDocument() {
+    setDocErr(null);
+    setDocMsg(null);
+    if (!docUploadFile) {
+      setDocErr("Choose a PDF or image file.");
+      return;
+    }
+    setDocBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("documents", docUploadFile);
+      fd.append("document_labels", docUploadLabel);
+      await apiFormData<{ message: string }>("/api/university/documents", fd);
+      setDocMsg("Document uploaded.");
+      setDocUploadFile(null);
+      await loadMe();
+    } catch (caught: unknown) {
+      setDocErr(caught instanceof Error ? caught.message : "Upload failed");
+    } finally {
+      setDocBusy(false);
     }
   }
 
@@ -1023,6 +1312,49 @@ export function UniversityPage() {
     batchRowsNeedingPreparation.length > 0 &&
     batchRowsNeedingPreparation.every((r) => r.row_status === "prepared");
   const batchCanSign = Boolean(verified && activeBatchId != null && canUseChain && batchAllReadyForSigning);
+
+  const batchStatus = batchSummary?.status ?? "";
+  const batchStepPrepared =
+    batchRowsNeedingPreparation.length === 0 ||
+    batchRowsNeedingPreparation.every((r) => r.row_status === "prepared");
+  const batchStepSigned = ["authorized", "executing", "completed"].includes(batchStatus);
+  const batchStepExecuted = batchStatus === "completed";
+
+  const batchWorkspaceHasContent =
+    activeBatchId != null ||
+    batchFile != null ||
+    batchSummary != null ||
+    invalidPreview.length > 0 ||
+    queueRows.length > 0 ||
+    batchErr != null ||
+    batchMsg != null ||
+    batchMintErr != null;
+
+  function clearBatchWorkspace() {
+    if (!batchWorkspaceHasContent) return;
+    if (
+      !window.confirm(
+        "Clear this batch from the mint workspace?\n\n" +
+          "The batch and rows stay on the server for your records. This only resets the file picker, summary, row tables, and messages here so you can work on another upload."
+      )
+    ) {
+      return;
+    }
+    setActiveBatchId(null);
+    setBatchSummary(null);
+    setQueueRows([]);
+    setInvalidPreview([]);
+    setBatchFile(null);
+    setBatchDropzoneKey((k) => k + 1);
+    setBatchErr(null);
+    setBatchMsg(null);
+    setBatchMintErr(null);
+    setBatchAiRowId(null);
+    setBatchAiQuestion("");
+    setBatchAiErr(null);
+    setBatchAiText(null);
+    setBatchAiModel(null);
+  }
 
   const identityLogoSrc = institutionLogoDisplayUrl(me?.logo_url, me?.logo_uri);
 
@@ -1176,7 +1508,12 @@ export function UniversityPage() {
                 disabled={!verified}
               />
               <div className="row" style={{ marginTop: "0.45rem" }}>
-                <button type="button" onClick={() => void uploadLogo()} disabled={!verified || logoBusy} aria-busy={logoBusy}>
+                <button
+                  type="button"
+                  onClick={() => void uploadLogo()}
+                  disabled={!verified || logoBusy || accountFrozen}
+                  aria-busy={logoBusy}
+                >
                   <BusyLabel busy={logoBusy} idle="Upload logo" busyLabel="Uploading…" />
                 </button>
                 {logoMsg && <span className="muted-inline">{logoMsg}</span>}
@@ -1267,10 +1604,129 @@ export function UniversityPage() {
             </div>
             {profileErr && <div className="error">{profileErr}</div>}
             {profileMsg && <div className="success">{profileMsg}</div>}
-            <button type="submit" disabled={profileBusy || !verified} aria-busy={profileBusy}>
+            <button type="submit" disabled={profileBusy || !verified || accountFrozen} aria-busy={profileBusy}>
               <BusyLabel busy={profileBusy} idle="Save changes" busyLabel="Saving…" />
             </button>
           </form>
+
+          <h3 className="subheading" style={{ marginTop: "1.75rem" }}>
+            Operating expectations
+          </h3>
+          <p className="muted-inline small">
+            Used for admin review and capacity planning. Not shown on the public verify page or in student-facing
+            certificate fields.
+          </p>
+          <form className="stack" onSubmit={saveOperatingProfile} style={{ marginTop: "0.75rem" }}>
+            <div className="row two-col">
+              <div className="inst-field">
+                <label htmlFor="op_monthly">Expected mints / month</label>
+                <input
+                  id="op_monthly"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={opMonthly}
+                  onChange={(e) => setOpMonthly(e.target.value)}
+                />
+              </div>
+              <div className="inst-field">
+                <label htmlFor="op_annual">Expected mints / year (optional)</label>
+                <input
+                  id="op_annual"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={opAnnual}
+                  onChange={(e) => setOpAnnual(e.target.value)}
+                />
+              </div>
+            </div>
+            <fieldset className="register-fieldset">
+              <legend className="register-fieldset__legend">Operating days</legend>
+              <div className="register-day-grid" role="group" aria-label="Operating weekdays">
+                {SETTINGS_WEEKDAYS.map(({ value, label }) => (
+                  <label key={value} className="register-day-chip">
+                    <input type="checkbox" checked={opDays.has(value)} onChange={() => toggleSettingDay(value)} />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <div className="row two-col">
+              <div className="inst-field">
+                <label htmlFor="op_st">Hours start (optional)</label>
+                <input id="op_st" type="time" value={opStart} onChange={(e) => setOpStart(e.target.value)} />
+              </div>
+              <div className="inst-field">
+                <label htmlFor="op_en">Hours end (optional)</label>
+                <input id="op_en" type="time" value={opEnd} onChange={(e) => setOpEnd(e.target.value)} />
+              </div>
+            </div>
+            <div className="inst-field">
+              <label htmlFor="op_tz_set">IANA timezone</label>
+              <input
+                id="op_tz_set"
+                value={opTz}
+                onChange={(e) => setOpTz(e.target.value)}
+                placeholder="e.g. America/Jamaica"
+              />
+            </div>
+            {opErr && <div className="error">{opErr}</div>}
+            {opMsg && <div className="success">{opMsg}</div>}
+            <button type="submit" disabled={opBusy || accountFrozen} aria-busy={opBusy}>
+              <BusyLabel busy={opBusy} idle="Save operating profile" busyLabel="Saving…" />
+            </button>
+          </form>
+
+          <h3 className="subheading" style={{ marginTop: "1.75rem" }}>
+            Verification documents
+          </h3>
+          <p className="muted-inline small">
+            Append PDF or image files for admin review (same rules as registration). Existing files are listed below.
+          </p>
+          {me?.institution_documents && me.institution_documents.length > 0 ? (
+            <ul className="kv-list">
+              {me.institution_documents.map((d, i) => (
+                <li key={`${d.uri}-${i}`}>
+                  <strong>{d.label}</strong> — {d.filename}{" "}
+                  {d.url ? (
+                    <a href={d.url} target="_blank" rel="noopener noreferrer" className="home-link">
+                      Open
+                    </a>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted-inline small">No documents on file yet.</p>
+          )}
+          <div className="inst-field" style={{ marginTop: "0.65rem" }}>
+            <label htmlFor="doc_up">Add document</label>
+            <input
+              id="doc_up"
+              type="file"
+              accept=".pdf,application/pdf,image/png,image/jpeg,image/webp"
+              onChange={(e) => setDocUploadFile(e.target.files?.[0] || null)}
+            />
+          </div>
+          <div className="inst-field">
+            <label htmlFor="doc_lab">Type</label>
+            <select id="doc_lab" value={docUploadLabel} onChange={(e) => setDocUploadLabel(e.target.value)}>
+              <option value="Accreditation">Accreditation</option>
+              <option value="Authorization letter">Authorization letter</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          {docErr && <div className="error">{docErr}</div>}
+          {docMsg && <div className="success">{docMsg}</div>}
+          <button
+            type="button"
+            onClick={() => void uploadInstitutionDocument()}
+            disabled={docBusy || accountFrozen}
+            aria-busy={docBusy}
+          >
+            <BusyLabel busy={docBusy} idle="Upload document" busyLabel="Uploading…" />
+          </button>
         </section>
       )}
 
@@ -1367,30 +1823,13 @@ export function UniversityPage() {
           <button
             type="submit"
             className="inst-submit-wide"
-            disabled={mintBusy || !verified || !canUseChain}
+            disabled={mintBusy || !verified || !canUseChain || accountFrozen}
             aria-busy={mintBusy}
           >
             <BusyLabel busy={mintBusy} idle="Generate credential" busyLabel="Authorizing / minting…" />
           </button>
         </form>
       </section>
-      )}
-
-      {mode === "audit" && (
-        <section className="panel risk-monitoring-teaser">
-          <h2 className="subhead">Audit &amp; risk monitoring</h2>
-          <p className="muted-inline small">
-            Review operational signals, batch stress metrics, and an optional AI summary on the dedicated risk dashboard.
-          </p>
-          <div className="row" style={{ gap: "0.65rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
-            <Link to="/university/risk" className="risk-monitoring-teaser__cta">
-              Open risk dashboard
-            </Link>
-            <Link to="/university/analytics" className="btn-secondary" style={{ textDecoration: "none", display: "inline-flex" }}>
-              Institution dashboard
-            </Link>
-          </div>
-        </section>
       )}
 
       {mode === "batch" && (
@@ -1412,6 +1851,17 @@ export function UniversityPage() {
           . Optional: <code>image_ipfs_uri</code>. Max 500 rows. Student email and internal ID are stored
           only in the database — they are never pinned to IPFS.
         </p>
+        <ol className="uni-flow-steps" aria-label="Typical batch mint sequence">
+          <li className="uni-flow-steps__item">
+            <span>1</span> Upload &amp; validate student list
+          </li>
+          <li className="uni-flow-steps__item">
+            <span>2</span> Prepare all rows (IPFS + index)
+          </li>
+          <li className="uni-flow-steps__item">
+            <span>3</span> Sign batch EIP-712 &amp; execute mints on-chain
+          </li>
+        </ol>
         <div className="stack" style={{ marginTop: "0.65rem" }}>
           <div className="inst-field">
             <label htmlFor="batch_csv">Student list (CSV)</label>
@@ -1432,12 +1882,13 @@ export function UniversityPage() {
               }}
             >
               <input
+                key={batchDropzoneKey}
                 id="batch_csv"
                 className="inst-dropzone-input"
                 type="file"
                 accept=".csv,text/csv"
                 onChange={(e) => setBatchFile(e.target.files?.[0] || null)}
-                disabled={!verified || batchBusy}
+                disabled={!verified || batchBusy || accountFrozen}
               />
               <div className="inst-dropzone-ui">
                 <span className="inst-dropzone-icon" aria-hidden>
@@ -1454,7 +1905,12 @@ export function UniversityPage() {
             </div>
           </div>
           <div className="row">
-            <button type="button" onClick={() => void uploadMintBatch()} disabled={!verified || batchBusy} aria-busy={batchBusy}>
+            <button
+              type="button"
+              onClick={() => void uploadMintBatch()}
+              disabled={!verified || batchBusy || accountFrozen}
+              aria-busy={batchBusy}
+            >
               <BusyLabel busy={batchBusy} idle="Upload & validate batch" busyLabel="Uploading…" />
             </button>
             {activeBatchId != null && (
@@ -1462,9 +1918,26 @@ export function UniversityPage() {
                 type="button"
                 className="btn-secondary"
                 onClick={() => void refreshQueueRows()}
-                disabled={!verified || batchBusy}
+                disabled={!verified || batchBusy || accountFrozen}
               >
                 Refresh rows
+              </button>
+            )}
+            {batchWorkspaceHasContent && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => clearBatchWorkspace()}
+                disabled={
+                  !verified ||
+                  batchBusy ||
+                  batchPrepAllBusy ||
+                  batchSignBusy ||
+                  batchExecBusy ||
+                  batchAiBusy
+                }
+              >
+                Clear batch
               </button>
             )}
           </div>
@@ -1472,6 +1945,18 @@ export function UniversityPage() {
             <p className="muted-inline" style={{ marginTop: 0 }}>
               Batch #{activeBatchId}: status <strong>{batchSummary.status}</strong> — total{" "}
               {batchSummary.total_rows}, valid {batchSummary.valid_rows}, invalid {batchSummary.invalid_rows}
+              {batchSummary.timing?.cumulative_execute_wall_ms != null && batchSummary.timing.cumulative_execute_wall_ms > 0 ? (
+                <>
+                  {" "}
+                  — execute wall total <strong>{formatDurationMs(batchSummary.timing.cumulative_execute_wall_ms)}</strong>
+                  {batchSummary.timing.last_execute_chunk_wall_ms != null ? (
+                    <>
+                      {" "}
+                      (last chunk {formatDurationMs(batchSummary.timing.last_execute_chunk_wall_ms)})
+                    </>
+                  ) : null}
+                </>
+              ) : null}
             </p>
           )}
           {batchErr && <div className="error">{batchErr}</div>}
@@ -1516,9 +2001,10 @@ export function UniversityPage() {
         )}
         <div className="stack" style={{ marginTop: "1rem" }}>
           <p className="muted-inline small" style={{ marginTop: 0 }}>
-            Prepare each valid row on the server (IPFS + index). When every non-invalid row is <code>prepared</code>,
-            sign one <strong>batch EIP-712</strong> authorization (no gas), then run <strong>Execute batch mints</strong>{" "}
-            so the platform minter submits one chain transaction per row.
+            Use <strong>Prepare all rows</strong> to pin metadata on the server (IPFS + index) for every row that still
+            needs it. When every non-invalid row is <code>prepared</code>, sign one <strong>batch EIP-712</strong>{" "}
+            authorization (no gas), then run <strong>Execute batch mints</strong> so the platform minter submits one chain
+            transaction per row.
           </p>
           {batchSummary && batchSummary.valid_rows > 0 && (
             <p className="muted-inline small">
@@ -1534,25 +2020,26 @@ export function UniversityPage() {
           {batchMintErr && <div className="error">{batchMintErr}</div>}
           {!batchCanSign && activeBatchId != null && batchRowsNeedingPreparation.length > 0 && (
             <div className="warn-banner">
-              Batch signing requires that all non-invalid rows are <strong>prepared</strong>.
-              Click <strong>Prepare next row</strong> until every row shows <code>prepared</code>.
+              Batch signing requires that all non-invalid rows are <strong>prepared</strong>. Run{" "}
+              <strong>Prepare all rows</strong> until every row shows <code>prepared</code>.
             </div>
+          )}
+          {activeBatchId != null && (
+            <BatchMintProgressStepper
+              prepared={batchStepPrepared}
+              signed={batchStepSigned}
+              executed={batchStepExecuted}
+              prepareBusy={batchPrepAllBusy}
+              signBusy={batchSignBusy}
+              executeBusy={batchExecBusy}
+            />
           )}
           <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
             <button
               type="button"
-              onClick={() => void prepareNextBatchRow()}
-              disabled={!verified || batchMintBusy || activeBatchId == null}
-              aria-busy={batchMintBusy}
-            >
-              <BusyLabel busy={batchMintBusy} idle="Prepare next row" busyLabel="Preparing…" />
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
               onClick={() => void prepareAllBatchRows()}
-              disabled={!verified || batchPrepAllBusy || batchMintBusy || activeBatchId == null}
-              title="Prepare all remaining rows sequentially"
+              disabled={!verified || batchPrepAllBusy || activeBatchId == null || accountFrozen}
+              title="Prepare all remaining rows sequentially (IPFS + index per row)"
               aria-busy={batchPrepAllBusy}
             >
               <BusyLabel busy={batchPrepAllBusy} idle="Prepare all rows" busyLabel="Preparing all…" />
@@ -1560,7 +2047,7 @@ export function UniversityPage() {
             <button
               type="button"
               onClick={() => void signBatchMintAuthorization()}
-              disabled={!batchCanSign || batchSignBusy || activeBatchId == null}
+              disabled={!batchCanSign || batchSignBusy || activeBatchId == null || accountFrozen}
               aria-busy={batchSignBusy}
             >
               <BusyLabel busy={batchSignBusy} idle="Sign batch authorization" busyLabel="Signing…" />
@@ -1569,7 +2056,7 @@ export function UniversityPage() {
               type="button"
               className="btn-secondary"
               onClick={() => void executeBatchMints()}
-              disabled={!verified || batchExecBusy || activeBatchId == null}
+              disabled={!verified || batchExecBusy || activeBatchId == null || accountFrozen}
               aria-busy={batchExecBusy}
             >
               <BusyLabel busy={batchExecBusy} idle="Execute batch mints" busyLabel="Executing…" />
@@ -1578,7 +2065,7 @@ export function UniversityPage() {
               type="button"
               className="btn-secondary"
               onClick={() => void downloadBatchErrorCsv()}
-              disabled={!verified || activeBatchId == null}
+              disabled={!verified || activeBatchId == null || accountFrozen}
             >
               Download error report (CSV)
             </button>
@@ -1593,6 +2080,7 @@ export function UniversityPage() {
                     <th>Student</th>
                     <th>Status</th>
                     <th>Token</th>
+                    <th>Timing</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -1606,6 +2094,17 @@ export function UniversityPage() {
                         <span className={`status ${r.row_status}`}>{r.row_status}</span>
                       </td>
                       <td className="mono small">{r.token_id ?? "—"}</td>
+                      <td className="muted-inline small">
+                        {r.prepare_to_mint_ms != null || r.platform_mint_ms != null ? (
+                          <>
+                            prep→mint {formatDurationMs(r.prepare_to_mint_ms ?? undefined)}
+                            <br />
+                            platform {formatDurationMs(r.platform_mint_ms ?? undefined)}
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td>
                         <div className="row" style={{ flexWrap: "wrap", gap: "0.35rem", alignItems: "center" }}>
                           <button
@@ -1625,7 +2124,7 @@ export function UniversityPage() {
                               type="button"
                               className="btn-text"
                               onClick={() => void clearPrepareForActiveBatchRow(r.id)}
-                              disabled={batchMintBusy}
+                              disabled={batchPrepAllBusy || accountFrozen}
                             >
                               Clear prepare
                             </button>
@@ -1694,7 +2193,12 @@ export function UniversityPage() {
                       placeholder="Optional — leave blank for a general consistency check"
                     />
                     <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
-                      <button type="button" onClick={() => void runBatchRowAi()} disabled={batchAiBusy || !verified} aria-busy={batchAiBusy}>
+                      <button
+                        type="button"
+                        onClick={() => void runBatchRowAi()}
+                        disabled={batchAiBusy || !verified || accountFrozen}
+                        aria-busy={batchAiBusy}
+                      >
                         <BusyLabel busy={batchAiBusy} idle="Run AI check" busyLabel="Checking…" />
                       </button>
                       <button
@@ -1732,12 +2236,126 @@ export function UniversityPage() {
       </section>
       )}
 
-      {mode === "audit" && (
+      {mode === "request" && (
+      <section className="panel">
+        <h2 className="subhead">Student claim requests</h2>
+        <p className="muted-inline">
+          Students submit from the public <Link to="/claim">Claim</Link> page. Approve after you verify their identity
+          out-of-band, then use <strong>Actions</strong> → Claim to submit the on-chain transfer (or &quot;Fill claim form&quot;
+          after approval).
+        </p>
+        {studentClaimReqBusy && <p className="muted-inline">Loading requests…</p>}
+        {studentClaimReqErr && <div className="error">{studentClaimReqErr}</div>}
+        {!studentClaimReqBusy && studentClaimReqs.length === 0 ? (
+          <p className="muted-inline">No requests yet.</p>
+        ) : (
+          <div style={{ overflowX: "auto", marginTop: "0.75rem" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Student</th>
+                  <th>Email</th>
+                  <th>Token</th>
+                  <th>Wallet</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {studentClaimReqs.map((r) => (
+                  <tr key={r.id}>
+                    <td className="mono small">{r.created_at ? r.created_at.slice(0, 19).replace("T", " ") : "—"}</td>
+                    <td>
+                      {r.student_full_name || "—"}
+                      <div className="muted-inline small">ID: {r.student_internal_id}</div>
+                    </td>
+                    <td className="small">{r.student_email}</td>
+                    <td className="mono small">#{r.token_id}</td>
+                    <td className="mono small" title={r.wallet_address}>
+                      {r.wallet_address.slice(0, 6)}…{r.wallet_address.slice(-4)}
+                    </td>
+                    <td>
+                      <span className="badge neutral">{r.status}</span>
+                      {r.rejection_reason ? (
+                        <div className="muted-inline small" title={r.rejection_reason}>
+                          {r.rejection_reason.slice(0, 48)}
+                          {r.rejection_reason.length > 48 ? "…" : ""}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>
+                      <div className="row" style={{ flexWrap: "wrap", gap: "0.35rem" }}>
+                        {r.status === "pending" ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => void approveStudentClaimRequest(r.id)}
+                              disabled={accountFrozen}
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => void rejectStudentClaimRequest(r.id)}
+                              disabled={accountFrozen}
+                            >
+                              Reject
+                            </button>
+                          </>
+                        ) : null}
+                        {r.status === "approved" ? (
+                          <>
+                            <Link
+                              className={`btn-secondary${accountFrozen ? " disabled" : ""}`}
+                              style={{
+                                textDecoration: "none",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                pointerEvents: accountFrozen ? "none" : undefined,
+                                opacity: accountFrozen ? 0.5 : undefined,
+                              }}
+                              to={`/university?mode=actions&claimToken=${r.token_id}&claimWallet=${encodeURIComponent(r.wallet_address)}`}
+                              aria-disabled={accountFrozen}
+                              onClick={(e) => {
+                                if (accountFrozen) e.preventDefault();
+                              }}
+                            >
+                              Fill claim form
+                            </Link>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              onClick={() => void completeStudentClaimRequest(r.id)}
+                              disabled={accountFrozen}
+                            >
+                              Mark transferred
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+      )}
+
+      {mode === "actions" && (
       <>
       <section className="panel">
         <h2 className="subhead">Claim (transfer to student &amp; lock)</h2>
         <p className="muted-inline">
           You must be connected as the issuer; the student address is only the recipient parameter.
+        </p>
+        <p className="muted-inline small" style={{ marginTop: "0.35rem" }}>
+          The issuer wallet pays gas on Amoy — it needs a small POL balance (testnet faucet). If MetaMask shows a vague
+          “estimateGas” error, check POL balance and that this wallet still owns the token.
         </p>
         <form className="stack" onSubmit={claim}>
           <div className="row two-col">
@@ -1774,7 +2392,7 @@ export function UniversityPage() {
           </div>
           {claimErr && <div className="error">{claimErr}</div>}
           {claimMsg && <div className="success">{claimMsg}</div>}
-          <button type="submit" disabled={claimBusy || !verified || !canUseChain} aria-busy={claimBusy}>
+          <button type="submit" disabled={claimBusy || !verified || !canUseChain || accountFrozen} aria-busy={claimBusy}>
             <BusyLabel busy={claimBusy} idle="Claim & lock (soulbound)" busyLabel="Claiming…" />
           </button>
         </form>
@@ -1803,7 +2421,7 @@ export function UniversityPage() {
             <button
               type="submit"
               className="btn-secondary"
-              disabled={revokeBusy || !verified || !canUseChain}
+              disabled={revokeBusy || !verified || !canUseChain || accountFrozen}
               aria-busy={revokeBusy}
             >
               <BusyLabel busy={revokeBusy} idle="Revoke on-chain" busyLabel="Revoking…" />
@@ -1830,7 +2448,12 @@ export function UniversityPage() {
             </div>
             {burnErr && <div className="error">{burnErr}</div>}
             {burnMsg && <div className="success">{burnMsg}</div>}
-            <button type="submit" className="btn-secondary" disabled={burnBusy || !verified || !canUseChain} aria-busy={burnBusy}>
+            <button
+              type="submit"
+              className="btn-secondary"
+              disabled={burnBusy || !verified || !canUseChain || accountFrozen}
+              aria-busy={burnBusy}
+            >
               <BusyLabel busy={burnBusy} idle="Burn token" busyLabel="Burning…" />
             </button>
           </form>
@@ -1917,7 +2540,7 @@ export function UniversityPage() {
           </div>
           {reissueErr && <div className="error">{reissueErr}</div>}
           {reissueMsg && <div className="success">{reissueMsg}</div>}
-          <button type="submit" disabled={reissueBusy || !verified || !canUseChain} aria-busy={reissueBusy}>
+          <button type="submit" disabled={reissueBusy || !verified || !canUseChain || accountFrozen} aria-busy={reissueBusy}>
             <BusyLabel busy={reissueBusy} idle="Revoke and reissue" busyLabel="Reissuing…" />
           </button>
         </form>
@@ -1932,7 +2555,12 @@ export function UniversityPage() {
         )}
         <h2 className="subhead">Activity log</h2>
         <div className="row">
-          <button type="button" onClick={() => void syncAndRefreshActivity()} disabled={eventsBusy || !verified} aria-busy={eventsBusy}>
+          <button
+            type="button"
+            onClick={() => void syncAndRefreshActivity()}
+            disabled={eventsBusy || !verified || accountFrozen}
+            aria-busy={eventsBusy}
+          >
             <BusyLabel busy={eventsBusy} idle="Sync and refresh" busyLabel="Refreshing…" />
           </button>
         </div>
@@ -1993,10 +2621,7 @@ export function UniversityPage() {
 
       </div>
 
-      <InstitutionBottomNav
-        active={mode}
-        hrefFor={(k) => (k === "audit" ? "/university/risk" : `/university?mode=${k}`)}
-      />
+      <InstitutionBottomNav active={mode} hrefFor={institutionPortalHref} />
     </>
   );
 }
