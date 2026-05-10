@@ -1,25 +1,35 @@
 :root {
-  --bg: #0a0f18;
-  --bg-elevated: #111824;
-  --panel: rgba(17, 24, 38, 0.88);
-  --panel-solid: #121a2a;
-  --border: rgba(90, 110, 150, 0.35);
-  --border-subtle: rgba(58, 74, 110, 0.45);
-  --text: #eef2f9;
-  --muted: #a3aebf;
-  --accent: #4f8cff;
-  --accent-hover: #6aa3ff;
-  --accent-soft: rgba(79, 140, 255, 0.12);
-  --danger: #f07178;
-  --ok: #6eda95;
-  --warn: #e8c170;
+  --bg: #0f172a;
+  --bg-elevated: #111827;
+
+  --panel: rgba(17, 24, 39, 0.88);
+  --panel-solid: #1e293b;
+
+  --border: rgba(148, 163, 184, 0.18);
+  --border-subtle: rgba(148, 163, 184, 0.12);
+
+  --text: #f8fafc;
+  --muted: #cbd5e1;
+
+  --accent: #3b82f6;
+  --accent-hover: #60a5fa;
+  --accent-soft: rgba(59, 130, 246, 0.12);
+
+  --danger: #ef4444;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+
   --font: "DM Sans", system-ui, sans-serif;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 8px 28px rgba(0, 0, 0, 0.38);
-  --radius: 12px;
-  --space-section: 2.75rem;
-  --space-panel: 1.35rem;
-  --sidebar-width: 15.75rem;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.18);
+  --shadow-md: 0 12px 40px rgba(0, 0, 0, 0.28);
+
+  --radius: 16px;
+
+  --space-section: 3rem;
+  --space-panel: 1.5rem;
+
+  --sidebar-width: 16rem;
 }
 
 * {
@@ -29,10 +39,27 @@
 body {
   margin: 0;
   min-height: 100vh;
+
   font-family: var(--font);
+
   background-color: var(--bg);
-  background-image: radial-gradient(ellipse 100% 70% at 50% -15%, rgba(55, 95, 180, 0.2), transparent 58%);
+
+  background-image:
+    radial-gradient(
+      ellipse 80% 60% at 50% -10%,
+      rgba(59, 130, 246, 0.18),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 60% 40% at 100% 20%,
+      rgba(96, 165, 250, 0.08),
+      transparent 60%
+    );
+
   color: var(--text);
+
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 .app {
@@ -76,7 +103,7 @@ body {
 }
 
 .app-sidebar {
-  --sidebar-bg: #0b111b;
+  --sidebar-bg: #111827;
   --sidebar-accent: #2563eb;
   --sidebar-active-bg: rgba(37, 99, 235, 0.12);
   width: var(--sidebar-width);
@@ -732,15 +759,43 @@ input:focus {
 }
 
 button {
-  padding: 0.65rem 1.1rem;
-  border-radius: 8px;
+  padding: 0.75rem 1.15rem;
+
+  border-radius: 14px;
+
   border: none;
-  background: linear-gradient(180deg, #5a9cff, var(--accent));
-  color: #fff;
-  font-weight: 600;
+
+  background: linear-gradient(
+    180deg,
+    #60a5fa,
+    var(--accent)
+  );
+
+  color: white;
+
+  font-weight: 700;
+
   font-family: var(--font);
+
   cursor: pointer;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset, var(--shadow-sm);
+
+  transition:
+    transform 0.2s ease,
+    background 0.2s ease,
+    box-shadow 0.2s ease;
+
+  box-shadow:
+    0 4px 18px rgba(59, 130, 246, 0.28);
+}
+
+button:hover {
+  transform: translateY(-2px);
+
+  background: linear-gradient(
+    180deg,
+    #93c5fd,
+    var(--accent-hover)
+  );
 }
 
 button.btn-primary {
@@ -754,6 +809,35 @@ button:disabled {
 
 button.btn-secondary {
   background: linear-gradient(180deg, #4a5568, #374151);
+}
+
+.panel,
+.home-mock-flow-panel,
+.home-trust-kv-card,
+.home-mock-role-card,
+.verify-mock-panel,
+.verify-summary-card {
+  backdrop-filter: blur(14px);
+
+  border: 1px solid rgba(255,255,255,0.06);
+
+  box-shadow:
+    0 8px 32px rgba(0,0,0,0.22);
+
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.panel:hover,
+.home-mock-flow-panel:hover,
+.home-trust-kv-card:hover,
+.home-mock-role-card:hover,
+.verify-mock-panel:hover {
+  transform: translateY(-4px);
+
+  box-shadow:
+    0 18px 42px rgba(0,0,0,0.28);
 }
 
 .stack {
@@ -6705,3 +6789,36 @@ button.btn-secondary:disabled:has(.busy-label) .loading-spinner {
   text-underline-offset: 2px;
 }
 
+
+.home-mock-cred-icon svg {
+  width: 24px;
+  height: 24px;
+  color: #60a5fa;
+}
+
+.home-mock-hero-lead {
+  font-size: 1.1rem;
+  line-height: 1.8;
+  color: rgba(255,255,255,0.75);
+  max-width: 680px;
+}
+
+.home-mock-cred-icon svg,
+.home-trust-keys-icon,
+.home-bottom-rail__icon svg {
+  width: 24px;
+  height: 24px;
+  color: #60a5fa;
+}
+
+.home-mock-role-card,
+.home-trust-kv-card,
+.home-mock-flow-panel {
+  transition: all 0.25s ease;
+}
+
+.home-mock-role-card:hover,
+.home-trust-kv-card:hover,
+.home-mock-flow-panel:hover {
+  transform: translateY(-4px);
+}
