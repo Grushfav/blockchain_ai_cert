@@ -95,6 +95,11 @@ export function HomePage() {
 
   return (
     <div className="home-page home-page--mock">
+      {cfgErr ? (
+        <div className="error" role="alert" style={{ margin: "0 1rem 1rem" }}>
+          {cfgErr}
+        </div>
+      ) : null}
 
       {/* HERO */}
 
@@ -124,6 +129,10 @@ export function HomePage() {
           credentials using blockchain technology.
           Prevent fraud, reduce manual verification,
           and give employers instant trust.
+        </p>
+
+        <p className="muted-inline small" style={{ marginTop: "0.5rem" }}>
+          Demo network: {chainLabel}
         </p>
 
         <Link
