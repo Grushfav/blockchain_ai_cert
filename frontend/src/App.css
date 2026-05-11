@@ -798,6 +798,7 @@ button:hover {
   );
 }
 
+
 button.btn-primary {
   background: linear-gradient(180deg, #5a9cff, var(--accent));
 }
@@ -1542,12 +1543,10 @@ td.actions button {
 }
 
 .verify-mock-hero__title {
-  margin: 0 0 0.65rem;
-  font-size: clamp(1.5rem, 3.8vw, 1.95rem);
+  font-size: 3rem;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
   font-weight: 800;
-  letter-spacing: -0.03em;
-  line-height: 1.15;
-  color: #fff;
 }
 
 .verify-mock-hero__lead {
@@ -3634,12 +3633,40 @@ a.btn-sm {
   margin-bottom: 1rem;
 }
 
+.home-register-section {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 6rem 0;
+  margin-bottom: 3rem;
+}
+
 .home-register-card {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 1.15rem 1.25rem;
-  background: rgba(21, 29, 46, 0.55);
-  max-width: 36rem;
+  width: 100%;
+  max-width: 900px;
+
+  padding: 3rem;
+
+  border-radius: 28px;
+
+  background: rgba(15, 23, 42, 0.75);
+
+  border: 1px solid rgba(255, 255, 255, 0.08);
+
+  backdrop-filter: blur(14px);
+
+  box-shadow:
+    0 10px 40px rgba(0, 0, 0, 0.35);
+}
+
+.home-register-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.home-register-card .btn {
+  margin-top: 2rem;
 }
 
 .home-register-card p {
@@ -3648,6 +3675,8 @@ a.btn-sm {
   font-size: 0.92rem;
   line-height: 1.5;
 }
+
+
 
 .home-uni-grid {
   list-style: none;
@@ -6822,3 +6851,48 @@ button.btn-secondary:disabled:has(.busy-label) .loading-spinner {
 .home-mock-flow-panel:hover {
   transform: translateY(-4px);
 }
+
+.verify-mock-panel {
+  border-radius: 24px;
+  backdrop-filter: blur(12px);
+}
+
+.inst-input-wrap svg {
+  width: 18px;
+  height: 18px;
+  color: #60a5fa;
+}
+
+.verify-mock-hero__title {
+  font-size: clamp(2.4rem, 4vw, 4rem);
+  line-height: 1.02;
+  letter-spacing: -0.05em;
+  font-weight: 800;
+}
+
+.verify-form--mock {
+  gap: 1.5rem;
+}
+
+.verify-security-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.verify-security-icon {
+  width: 22px;
+  height: 22px;
+  color: #60a5fa;
+}
+
+.inst-input-wrap select {
+  color: white;
+  background: #020817;
+}
+
+.inst-input-wrap select option {
+  background: #020817;
+  color: white;
+}
+

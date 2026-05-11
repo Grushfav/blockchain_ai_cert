@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react";
 import { API_BASE } from "../api/client";
+import {
+  Building,
+  User,
+  GraduationCap,
+  BadgeCheck,
+  CalendarDays,
+  Hash,
+} from "lucide-react";
 import { BusyLabel, LoadingSpinner } from "../components/LoadingSpinner";
 import { VerifyResultView, type FieldVerifyResponse } from "../components/VerifyResultView";
 
@@ -83,7 +91,7 @@ function AiSummary({ verification }: { verification: FieldVerifyResponse }) {
         <summary className="ai-summary__summary">
           <span className="ai-summary__title">
             <span className="ai-summary__title-icon" aria-hidden>
-              ✦
+              <Hash/>
             </span>{" "}
             Plain-language summary
           </span>
@@ -267,9 +275,9 @@ export function VerifyPage() {
     <div className="verify-page verify-page--mock">
       <header className="verify-mock-hero">
         <div className="verify-mock-hero__top">
-          <span className="home-mock-eyebrow">Public verification</span>
+          <span className="home-mock-eyebrow"></span>
         </div>
-        <h1 className="verify-mock-hero__title">Certificate verification</h1>
+        <h1 className="verify-mock-hero__title">Certificate Verification</h1>
         <p className="verify-mock-hero__lead">
           Enter the issued fields exactly as they appear on the credential. If there is no match, you can verify with a token
           ID instead.
@@ -292,7 +300,7 @@ export function VerifyPage() {
               <label htmlFor="vf_inst">Institution name</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  🏛
+                  <Building />
                 </span>
                 <input
                   id="vf_inst"
@@ -307,7 +315,7 @@ export function VerifyPage() {
               <label htmlFor="vf_student">Student name</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  👤
+                  <User />
                 </span>
                 <input
                   id="vf_student"
@@ -324,7 +332,7 @@ export function VerifyPage() {
               <label htmlFor="vf_degree">Degree type</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  🎓
+                  <GraduationCap/>
                 </span>
                 <input
                   id="vf_degree"
@@ -339,7 +347,7 @@ export function VerifyPage() {
               <label htmlFor="vf_cert">Certificate ID</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  ▣
+                  <BadgeCheck/>
                 </span>
                 <input id="vf_cert" placeholder="ID-8829" value={certId} onChange={(e) => setCertId(e.target.value)} required />
               </div>
@@ -349,7 +357,7 @@ export function VerifyPage() {
             <label htmlFor="vf_date">Issue date (YYYY-MM-DD)</label>
             <div className="inst-input-wrap">
               <span className="inst-input-icon" aria-hidden>
-                📅
+                <CalendarDays/>
               </span>
               <input id="vf_date" type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} required />
             </div>
@@ -429,7 +437,7 @@ export function VerifyPage() {
             <label htmlFor="vf_doc_inst">Institution name (optional)</label>
             <div className="inst-input-wrap inst-input-wrap--disabled">
               <span className="inst-input-icon" aria-hidden>
-                🏛
+                <Building/>
               </span>
               <input id="vf_doc_inst" type="text" disabled placeholder="—" />
             </div>
@@ -438,7 +446,7 @@ export function VerifyPage() {
             <label htmlFor="vf_doc_candidate">Candidate name (optional)</label>
             <div className="inst-input-wrap inst-input-wrap--disabled">
               <span className="inst-input-icon" aria-hidden>
-                👤
+                <User/>
               </span>
               <input id="vf_doc_candidate" type="text" disabled placeholder="—" />
             </div>
