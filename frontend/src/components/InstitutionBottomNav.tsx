@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
-  BadgeCheck,
+  GraduationCap,
   Files,
-  ShieldCheck,
+  Workflow,
   Inbox,
   Wallet,
   Settings,
@@ -16,9 +16,9 @@ const ITEMS: {
   icon: ReactNode;
   label: string;
 }[] = [
-  { key: "mint", icon: <BadgeCheck/>, label: "Issue" },
+  { key: "mint", icon: <GraduationCap />, label: "Issue" },
   { key: "batch", icon: <Files/>, label: "Batch" },
-  { key: "actions", icon: <ShieldCheck/>, label: "Actions" },
+  { key: "actions", icon: <Workflow />, label: "Actions" },
   { key: "request", icon: <Inbox/>, label: "Request" },
   { key: "wallet", icon: <Wallet/>, label: "Wallet" },
   { key: "settings", icon: <Settings/>, label: "Settings" },

@@ -5,6 +5,11 @@ import { TablePagination } from "../components/TablePagination";
 import { usePagination } from "../hooks/usePagination";
 import { MintHeatmapGrid, MintTimeseriesLineChart } from "../components/MintAnalyticsCharts";
 import { institutionLogoDisplayUrl } from "../utils/institutionLogo";
+import {
+  Gauge,
+  ClipboardList,
+  Files,
+} from "lucide-react";
 
 function formatDurationMs(ms: number | null | undefined): string {
   if (ms == null || ms < 0 || Number.isNaN(ms)) return "—";
@@ -866,7 +871,7 @@ export function UniversityAnalyticsPage() {
           }}
         >
           <span className="inst-dashboard-bottom-nav__icon" aria-hidden>
-            📊
+            <Gauge />
           </span>
           <span className="inst-dashboard-bottom-nav__label">Metrics</span>
         </button>
@@ -883,7 +888,7 @@ export function UniversityAnalyticsPage() {
           }}
         >
           <span className="inst-dashboard-bottom-nav__icon" aria-hidden>
-            📋
+            <ClipboardList />
           </span>
           <span className="inst-dashboard-bottom-nav__label">Recent activity</span>
         </button>
@@ -895,9 +900,9 @@ export function UniversityAnalyticsPage() {
           onClick={() => setDashTab("batches")}
         >
           <span className="inst-dashboard-bottom-nav__icon" aria-hidden>
-            📑
+            <Files />
           </span>
-          <span className="inst-dashboard-bottom-nav__label">CSV batch jobs</span>
+          <span className="inst-dashboard-bottom-nav__label">Batch Jobs</span>
         </button>
       </nav>
     </>
