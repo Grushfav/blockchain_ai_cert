@@ -15,6 +15,21 @@ import {
 import { institutionLogoDisplayUrl } from "../utils/institutionLogo";
 import { TablePagination } from "../components/TablePagination";
 import { usePagination } from "../hooks/usePagination";
+import {
+  Tag,
+  CalendarDays,
+  User,
+  UploadCloud,
+  GraduationCap,
+  Mail,
+  Phone,
+  Globe,
+  BadgeCheck,
+  Wallet,
+  ShieldCheck,
+  Sparkles,
+  Hash,
+} from "lucide-react";
 
 type Me = {
   name: string;
@@ -1525,7 +1540,7 @@ export function UniversityPage() {
                 <label htmlFor="profile_email">Contact email</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    ✉
+                    <Mail size={18} />
                   </span>
                   <input
                     id="profile_email"
@@ -1540,7 +1555,7 @@ export function UniversityPage() {
                 <label htmlFor="profile_phone">Contact phone</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    ☎
+                    <Phone size={18} />
                   </span>
                   <input
                     id="profile_phone"
@@ -1556,7 +1571,7 @@ export function UniversityPage() {
                 <label htmlFor="profile_web">Website</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    🔗
+                    <Globe size={18} />
                   </span>
                   <input id="profile_web" value={profileWebsite} onChange={(e) => setProfileWebsite(e.target.value)} required />
                 </div>
@@ -1565,7 +1580,7 @@ export function UniversityPage() {
                 <label htmlFor="profile_lic_id">License ID</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    ▣
+                    <BadgeCheck size={18} />
                   </span>
                   <input id="profile_lic_id" value={profileLicenseId} onChange={(e) => setProfileLicenseId(e.target.value)} required />
                 </div>
@@ -1576,7 +1591,7 @@ export function UniversityPage() {
                 <label htmlFor="profile_lic_auth">License authority</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    ⚖
+                    <ShieldCheck size={18} />
                   </span>
                   <input
                     id="profile_lic_auth"
@@ -1590,7 +1605,7 @@ export function UniversityPage() {
                 <label htmlFor="profile_lic_valid">License valid until</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    📅
+                    <CalendarDays size={18} />
                   </span>
                   <input
                     id="profile_lic_valid"
@@ -1761,7 +1776,7 @@ export function UniversityPage() {
               <label htmlFor="cert_id">Certificate ID</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  🏷
+                  <Tag size={18} />
                 </span>
                 <input
                   id="cert_id"
@@ -1776,7 +1791,7 @@ export function UniversityPage() {
               <label htmlFor="issue_date">Issue date</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  📅
+                  <CalendarDays size={18} />
                 </span>
                 <input
                   id="issue_date"
@@ -1792,7 +1807,7 @@ export function UniversityPage() {
             <label htmlFor="student_name">Student full name</label>
             <div className="inst-input-wrap">
               <span className="inst-input-icon" aria-hidden>
-                👤
+                <User size={18} />
               </span>
               <input
                 id="student_name"
@@ -1807,7 +1822,7 @@ export function UniversityPage() {
             <label htmlFor="degree">Degree program</label>
             <div className="inst-input-wrap">
               <span className="inst-input-icon" aria-hidden>
-                🎓
+                <GraduationCap size={18} />
               </span>
               <input
                 id="degree"
@@ -1892,7 +1907,7 @@ export function UniversityPage() {
               />
               <div className="inst-dropzone-ui">
                 <span className="inst-dropzone-icon" aria-hidden>
-                  ☁
+                  <UploadCloud />
                 </span>
                 <p>Click or drag to upload student list</p>
                 <p className="inst-dropzone-hint muted">
@@ -2151,7 +2166,7 @@ export function UniversityPage() {
                     <div className="ai-summary__summary" style={{ cursor: "default", marginBottom: "0.35rem" }}>
                       <span className="ai-summary__title">
                         <span className="ai-summary__title-icon" aria-hidden>
-                          ✦
+                          <Sparkles size={16} />
                         </span>{" "}
                         Batch row QA (AI)
                       </span>
@@ -2377,7 +2392,7 @@ export function UniversityPage() {
               <label htmlFor="stu">Recipient wallet</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  ⧉
+                  <Wallet size={20} />
                 </span>
                 <input
                   id="stu"
@@ -2406,7 +2421,7 @@ export function UniversityPage() {
               <label htmlFor="revoke_tid">Token ID</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  #
+                  <Hash />
                 </span>
                 <input
                   id="revoke_tid"
@@ -2436,7 +2451,7 @@ export function UniversityPage() {
               <label htmlFor="burn_tid">Token ID</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  #
+                  <Hash />
                 </span>
                 <input
                   id="burn_tid"
@@ -2468,7 +2483,7 @@ export function UniversityPage() {
               <label htmlFor="reissue_old">Old token ID</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  #
+                  <Hash />
                 </span>
                 <input
                   id="reissue_old"
@@ -2482,7 +2497,7 @@ export function UniversityPage() {
               <label htmlFor="reissue_cert_id">New certificate ID</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  🏷
+                  <Tag size={18} />
                 </span>
                 <input
                   id="reissue_cert_id"
@@ -2498,7 +2513,7 @@ export function UniversityPage() {
               <label htmlFor="reissue_student">Student full name</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  👤
+                  <User size={18} />
                 </span>
                 <input
                   id="reissue_student"
@@ -2512,7 +2527,7 @@ export function UniversityPage() {
               <label htmlFor="reissue_degree">Degree program</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
-                  🎓
+                  <GraduationCap size={18} />
                 </span>
                 <input
                   id="reissue_degree"
@@ -2527,7 +2542,7 @@ export function UniversityPage() {
             <label htmlFor="reissue_date">Issue date</label>
             <div className="inst-input-wrap">
               <span className="inst-input-icon" aria-hidden>
-                📅
+                <CalendarDays size={18} />
               </span>
               <input
                 id="reissue_date"
