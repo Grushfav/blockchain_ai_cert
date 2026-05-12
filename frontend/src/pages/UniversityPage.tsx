@@ -1376,18 +1376,15 @@ export function UniversityPage() {
   return (
     <>
       <header>
-        <h1>University portal</h1>
+        <h1>UNIVERSITY PORTAL</h1>
         <p>
-          Mint, claim, revoke, burn, and reissue using your approved issuer wallet only. Connect
-          MetaMask (or any injected wallet) on Polygon Amoy — private keys are never entered or sent
-          to this app.
+          Issue, revoke, burn, and reissue certificates using your approved issuer wallet. Connect MetaMask on Polygon Amoy. Your private keys are never shared with the platform.
         </p>
-        <p className="muted-inline">
-          <Link to="/university/overview">University overview hub</Link>
-          {" · "}
-          <Link to="/university/analytics">Open institution dashboard</Link> for issuance stats, batch outcomes, and
-          recent activity.
-        </p>
+         <p className="uni-dashboard-link-row">
+  <Link to="/university/overview">Institution Dashboard</Link>
+  {" · "}
+  Monitor issuance activity, batch results, and recent updates.
+</p>
       </header>
 
       <div className="inst-portal">

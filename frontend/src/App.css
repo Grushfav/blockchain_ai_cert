@@ -7020,3 +7020,28 @@ button.btn-secondary:disabled:has(.busy-label) .loading-spinner {
   color: white;
 }
 
+
+
+
+
+.uni-dashboard-link-row {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.15);
+
+  color: #cbd5e1;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+.uni-dashboard-link-row a {
+  color: #60a5fa;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.uni-dashboard-link-row a:hover {
+  color: #93c5fd;
+}
