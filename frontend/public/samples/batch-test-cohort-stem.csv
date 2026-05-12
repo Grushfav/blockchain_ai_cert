@@ -1,0 +1,5 @@
+cert_id,student_internal_id,student_email,student_full_name,degree_title,issue_date
+TSTEM-2026-001,INT-ST-2401,mira.adebayo@stem-test.example.edu,Mira Adebayo,BSc Computer Science,2026-05-12
+TSTEM-2026-002,INT-ST-2402,jonas.vik@stem-test.example.edu,Jonas Vik,MSc Artificial Intelligence,2026-05-12
+TSTEM-2026-003,INT-ST-2403,sofia.reyes@stem-test.example.edu,Sofia Reyes,BEng Electrical Engineering,2026-05-13
+TSTEM-2026-004,INT-ST-2404,chen.wei@stem-test.example.edu,Chen Wei,MEng Civil Engineering,2026-05-13

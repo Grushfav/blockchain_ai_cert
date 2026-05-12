@@ -1,0 +1,5 @@
+cert_id,student_internal_id,student_email,student_full_name,degree_title,issue_date,image_ipfs_uri
+TIMG-2026-901,INT-IM-9901,river.cole@image-test.example.edu,River Cole,BFA Graphic Design,2026-05-20,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
+TIMG-2026-902,INT-IM-9902,nova.park@image-test.example.edu,Nova Park,BSc Digital Media,2026-05-20,ipfs://bafybeie25lefv7e2kk3ye2jbq2elml4g75cl7z4wvo4hghq4uf3oi2dxzq
+TIMG-2026-903,INT-IM-9903,ellis.james@image-test.example.edu,Ellis James,BA Film Studies,2026-05-21,ipfs://bafybeicmj3p4xcdq4wcsefbhmf6rtpnkfdxtcdbf3zv52kqylu5vupalvi
+TIMG-2026-904,INT-IM-9904,casey.rivera@image-test.example.edu,Casey Rivera,MSc Human-Computer Interaction,2026-05-21,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u

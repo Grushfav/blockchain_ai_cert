@@ -1,3 +1,9 @@
 cert_id,student_internal_id,student_email,student_full_name,degree_title,issue_date,image_ipfs_uri
-certimg-011,STU-3001,dana.demo@example.edu,Gavin Seaton,BSc Computer Science,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
-certimg-012,STU-3002,eric.demo@example.edu,Gavin Seaton,MSc Physics,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
+certimg-211,STU-3001,dana.demo@example.edu,Gavin Seaton,BSc Computer Science,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
+certimg-212,STU-3007,eric.demo@example.edu,Gavin Seaton,MSc Physics,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
+certimg-4312,STU-30702,eric.demo@example.edu,David Teason,MSc Laws,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
+certimg-612,STU-300572,eric.demo@example.edu,Gavin Seaton,MSc Physics,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
+certimg-3311,STU-30501,dana.demo@example.edu,Gavin Seaton,BSc Computer Science,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
+certimg-42212,STU-30407,eric.demo@example.edu,Gavin Seaton,MSc Physics,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
+certimg-54312,STU-307052,eric.demo@example.edu,Samantha Samuels,Computer Science,2026-05-10,ipfs://bafybeie25lefv7e2kk3ye2jbq2elml4g75cl7z4wvo4hghq4uf3oi2dxzq
+certimg-56612,STU-3003472,eric.demo@example.edu,Shantay Kellyman,Bs Computer Science,2026-05-10,ipfs://bafybeicmj3p4xcdq4wcsefbhmf6rtpnkfdxtcdbf3zv52kqylu5vupalvi

@@ -2203,9 +2203,7 @@ export function UniversityPage() {
         <div className="stack" style={{ marginTop: "1rem" }}>
           <p className="muted-inline small" style={{ marginTop: 0 }}>
             Use <strong>Prepare all rows</strong> to pin metadata on the server (IPFS + index) for every row that still
-            needs it. When every non-invalid row is <code>prepared</code>, sign one <strong>batch EIP-712</strong>{" "}
-            authorization (no gas), then run <strong>Execute batch mints</strong> so the platform minter submits one chain
-            transaction per row.
+            needs it.
           </p>
           {batchSummary && batchSummary.valid_rows > 0 && (
             <p className="muted-inline small">
@@ -2554,10 +2552,10 @@ export function UniversityPage() {
         <p className="muted-inline">
           You must be connected as the issuer; the student address is only the recipient parameter.
         </p>
-        <p className="muted-inline small" style={{ marginTop: "0.35rem" }}>
+        {/* <p className="muted-inline small" style={{ marginTop: "0.35rem" }}>
           The issuer wallet pays gas on Amoy — it needs a small POL balance (testnet faucet). If MetaMask shows a vague
           “estimateGas” error, check POL balance and that this wallet still owns the token.
-        </p>
+        </p> */}
         <form className="stack" onSubmit={claim}>
           <div className="row two-col">
             <div className="inst-field">

@@ -285,7 +285,7 @@ export function AdminOverviewPage() {
     <div className="admin-overview shell-content">
       <header className="admin-analytics-header admin-overview__page-header">
         <div>
-          <h1>Admin — operations overview</h1>
+          <h1>Admin Operations overview</h1>
           <p className="muted-inline admin-overview__tagline">
             Real-time cryptographic monitoring and institutional activity audit trail.
           </p>

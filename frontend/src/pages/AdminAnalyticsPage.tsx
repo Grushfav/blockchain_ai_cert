@@ -351,7 +351,7 @@ export function AdminAnalyticsPage() {
     <div className="admin-analytics shell-content">
       <header className="admin-analytics-header">
         <div>
-          <h1>Admin — analytics (Phase 1)</h1>
+          <h1>Admin Analytics </h1>
           <p className="muted-inline admin-analytics-header__lede">
             DB-backed aggregates and audit export. On-chain truth may differ until universities run activity sync.
           </p>

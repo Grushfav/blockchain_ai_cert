@@ -1,0 +1,4 @@
+cert_id,student_internal_id,student_email,student_full_name,degree_title,issue_date
+THEAL-2026-501,INT-HL-5501,grace.okafor@health-test.example.edu,Grace Okafor,BSc Nursing,2026-06-01
+THEAL-2026-502,INT-HL-5502,diego.santos@health-test.example.edu,Diego Santos,MSc Public Health,2026-06-01
+THEAL-2026-503,INT-HL-5503,yuki.tanaka@health-test.example.edu,Yuki Tanaka,BSc Medical Laboratory Science,2026-06-02

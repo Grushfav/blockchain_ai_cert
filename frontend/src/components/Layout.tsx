@@ -368,7 +368,7 @@ export function Layout() {
                     <span className="app-sidebar__icon" aria-hidden>
                       <GraduationCap />
                     </span>
-                    <span className="app-sidebar__label">Mint</span>
+                    <span className="app-sidebar__label">Issue</span>
                   </NavLink>
                 </li>
                 <li>
