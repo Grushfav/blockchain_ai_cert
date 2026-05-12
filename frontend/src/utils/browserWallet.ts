@@ -58,6 +58,43 @@ export async function ensureChain(ethereum: Eip1193Provider, chainId: number): P
 
 type UniMe = { wallet_address: string; chain_id: number; status: string };
 
+/** Fired after sidebar connect/disconnect so the university portal can resync local issuer state. */
+export const INJECTED_WALLET_SYNC_EVENT = "trucert-injected-wallet-updated";
+
+export function emitInjectedWalletUpdated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(INJECTED_WALLET_SYNC_EVENT));
+}
+
+/**
+ * If the browser wallet is on the institution chain and the selected account matches
+ * ``me.wallet_address``, return that address; otherwise ``null``. Does not prompt MetaMask
+ * (uses ``eth_accounts`` only).
+ */
+export async function readIssuerReadyAddress(me: {
+  wallet_address: string;
+  chain_id: number;
+  status?: string;
+}): Promise<string | null> {
+  if (me.status !== undefined && me.status !== "verified") {
+    return null;
+  }
+  const ethereum = getInjectedProvider();
+  if (!ethereum) return null;
+  try {
+    const accounts = (await ethereum.request({ method: "eth_accounts" })) as string[];
+    const address = accounts[0];
+    if (!address) return null;
+    const provider = new BrowserProvider(ethereum);
+    const network = await provider.getNetwork();
+    if (Number(network.chainId) !== me.chain_id) return null;
+    if (address.toLowerCase() !== me.wallet_address.toLowerCase()) return null;
+    return address;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Request accounts via the injected wallet. For university sessions, switches to the
  * institution chain and ensures the active account matches the registered issuer address.

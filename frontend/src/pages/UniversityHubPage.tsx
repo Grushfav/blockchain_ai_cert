@@ -311,10 +311,10 @@ export function UniversityHubPage() {
                 <div className="mint-snapshot-card">
                   <div>
                     <p className="mint-snapshot-card__headline">
-                      Mints last 7d (UTC):{" "}
+                      Mints last 7d (UTC-5):{" "}
                       <strong>{(mint7dTotal ?? mint7dSeries.reduce((a, p) => a + p.count, 0)).toLocaleString()}</strong>
                     </p>
-                    <p className="mint-snapshot-card__sub">One bar per UTC calendar day · indexed activity log</p>
+                    <p className="mint-snapshot-card__sub">One bar per UTC-5 calendar day · indexed activity log</p>
                   </div>
                   <div className="mint-snapshot-card__chart">
                     <MintMiniBars series={mint7dSeries} />
@@ -410,7 +410,7 @@ export function UniversityHubPage() {
                 rows
               </p>
               <p className="uni-hub__batch-line uni-hub__batch-line--muted">
-                <span aria-hidden>⏱</span> Status {latestBatch.status} · {fmtTime(latestBatch.created_at)} UTC
+                <span aria-hidden>⏱</span> Status {latestBatch.status} · {fmtTime(latestBatch.created_at)} (stored UTC)
               </p>
               <Link to="/university?mode=batch" className="uni-hub__btn-primary">
                 Open batch mint
@@ -626,7 +626,7 @@ export function UniversityHubPage() {
                 </button>
               </div>
               <div className="uni-hub__tx-strip__right">
-                <span className="muted-inline small">{fmtTime(latestTx.created_at)} UTC</span>
+                <span className="muted-inline small">{fmtTime(latestTx.created_at)} (stored UTC)</span>
                 <a href={latestTx.tx_explorer_url || "#"} target="_blank" rel="noreferrer" className="uni-hub__tx-strip__link">
                   {explorerTxLinkLabel(me?.chain_id)}
                 </a>

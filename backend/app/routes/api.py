@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, current_app, jsonify, make_response, request
 from flask_jwt_extended import create_access_token, get_jwt, jwt_required
 from web3 import Web3
 
@@ -31,6 +31,7 @@ from app.models import (
     User,
 )
 from app.services import (
+    ai_response_cache,
     blockchain_service,
     eip712_service,
     gemini_service,
@@ -39,7 +40,7 @@ from app.services import (
     pinata_service,
     risk_hints_service,
 )
-from app.university_freeze import freeze_guard_response
+from app.university_freeze import freeze_guard_response, sync_uni_eip712_watermark
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 logger = logging.getLogger(__name__)
@@ -742,7 +743,13 @@ def university_me():
             "wallet_address": uni.wallet_address,
             "contract_address": Config.TRUCERT_CONTRACT_ADDRESS,
             "chain_id": chain_id,
-            "eip712_nonce": int(uni.eip712_nonce or 0),
+            "eip712_nonce": max(
+                int(uni.eip712_nonce or 0),
+                int(getattr(uni, "eip712_single_nonce", 0) or 0),
+                int(getattr(uni, "eip712_batch_nonce", 0) or 0),
+            ),
+            "eip712_single_nonce": int(getattr(uni, "eip712_single_nonce", 0) or 0),
+            "eip712_batch_nonce": int(getattr(uni, "eip712_batch_nonce", 0) or 0),
             "eip712_domain": eip712_domain,
             "logo_uri": uni.logo_uri,
             "logo_url": _ipfs_uri_to_gateway(uni.logo_uri or ""),
@@ -929,6 +936,11 @@ def _build_metadata(
     supersedes_token_id: int | None = None,
     skip_cert_id_uniqueness: bool = False,
 ) -> dict[str, Any]:
+    """Public certificate JSON fields only.
+
+    ``student_internal_id`` / ``student_email`` from ``data`` are intentionally ignored here so they
+    never affect Ed25519-signed JSON, ``_core_hash_hex``, or the EIP-712 mint commitment (on-chain).
+    """
     required = ("student_name", "degree_type", "issue_date", "cert_id")
     for k in required:
         if not data.get(k):
@@ -966,6 +978,7 @@ def _build_metadata(
 
 
 def _core_hash_hex(metadata: dict[str, Any]) -> str:
+    """Keccak256 of the five TruCert core strings — must match contract; excludes any DB-only issuer fields."""
     digest = Web3.solidity_keccak(
         ["string", "string", "string", "string", "string"],
         [
@@ -985,6 +998,81 @@ def _signature_status(metadata: dict[str, Any]) -> dict[str, Any]:
     return {"ok": ok, "reason": reason, "kid": metadata.get("trucert_sig_kid")}
 
 
+def _validate_single_mint_student_contact(data: dict[str, Any]) -> tuple[str, str]:
+    """Issuer-only keys for operations / future claim; never included in pinned or signed credential JSON."""
+    iid = str(data.get("student_internal_id") or "").strip()
+    email = str(data.get("student_email") or "").strip()
+    if not iid:
+        raise ValueError("student_internal_id is required")
+    if len(iid) > 128:
+        raise ValueError("student_internal_id must be at most 128 characters")
+    if not email:
+        raise ValueError("student_email is required")
+    if not _valid_email(email):
+        raise ValueError("student_email is not a valid email")
+    return iid, email
+
+
+def _effective_public_metadata_base() -> str:
+    """Env PUBLIC_METADATA_BASE_URL / _BASE_URI; else same-origin fallback for local dev (localhost / debug)."""
+    base = (Config.PUBLIC_METADATA_BASE_URL or "").strip().rstrip("/")
+    if base:
+        return base
+    try:
+        h = (request.host or "").split(":")[0].lower()
+        local_host = h in ("127.0.0.1", "localhost", "::1")
+        if local_host or getattr(current_app, "debug", False):
+            return (request.host_url or "").rstrip("/")
+    except Exception:
+        pass
+    return ""
+
+
+def _public_single_mint_metadata_url(token_id: int) -> str:
+    base = _effective_public_metadata_base()
+    if not base:
+        raise ValueError(
+            "PUBLIC_METADATA_BASE_URL is not configured (alias: PUBLIC_METADATA_BASE_URI). "
+            "Set it in .env to your API’s public origin with no trailing slash, e.g. https://api.example.com "
+            "or http://127.0.0.1:5000 for local testing. "
+            "If you open the portal from localhost without setting it, the server uses the request host automatically."
+        )
+    return f"{base}/api/public/metadata/{int(token_id)}"
+
+
+def _http_url_for_metadata_fetch(uri: str) -> str:
+    u = (uri or "").strip()
+    if u.startswith("http://") or u.startswith("https://"):
+        return u
+    return _ipfs_uri_to_http(u)
+
+
+def _offchain_metadata_from_certificate_record(rec: CertificateRecord) -> dict[str, Any] | None:
+    raw = (rec.signed_metadata_json or "").strip()
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    obj = dict(obj)
+    obj["_signature"] = _signature_status(obj)
+    return obj
+
+
+def _fetch_offchain_metadata_from_uri(uri: str) -> dict[str, Any]:
+    r = requests.get(_http_url_for_metadata_fetch(uri), timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    if not isinstance(data, dict):
+        raise ValueError("metadata response is not a JSON object")
+    out = dict(data)
+    out["_signature"] = _signature_status(out)
+    return out
+
+
 @bp.post("/university/certificates/prepare-mint")
 @jwt_required()
 def prepare_mint_certificate():
@@ -999,11 +1087,28 @@ def prepare_mint_certificate():
 
     data = request.get_json(silent=True) or {}
     try:
+        # IID/email: DB + MAR only — never in metadata, core_hash, or EIP-712 commitment.
+        student_internal_id, student_email = _validate_single_mint_student_contact(data)
         metadata = _build_metadata(data, uni)
         core_hash = _core_hash_hex(metadata)
         signed_metadata = metadata_signing.sign_metadata(metadata)
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
+
+    if not _effective_public_metadata_base():
+        return jsonify(
+            {
+                "error": (
+                    "PUBLIC_METADATA_BASE_URL is not configured (alias: PUBLIC_METADATA_BASE_URI). "
+                    "Set it in backend/.env to your API’s public origin, no trailing slash "
+                    "(e.g. http://127.0.0.1:5000 for local). "
+                    "If you use the portal at http://127.0.0.1 or http://localhost, the backend can infer the base URL "
+                    "automatically; for production or other hosts you must set this variable."
+                )
+            }
+        ), 503
+
+    signed_json = json.dumps(signed_metadata, ensure_ascii=False, separators=(",", ":"))
 
     try:
         w3 = blockchain_service.get_w3()
@@ -1012,22 +1117,27 @@ def prepare_mint_certificate():
             return jsonify({"error": cfg_err}), 503
         contract = blockchain_service.get_contract(w3)
         next_token_id = int(contract.functions.nextTokenId().call())
-        ipfs_uri = pinata_service.pin_certificate_metadata(next_token_id, signed_metadata, Config.PINATA_JWT)
+        metadata_uri = _public_single_mint_metadata_url(next_token_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 503
     except Exception as e:
         return jsonify({"error": f"Prepare mint failed: {e!s}"}), 502
 
     rec = CertificateRecord.query.filter_by(token_id=next_token_id).first()
     if not rec:
-        rec = CertificateRecord(token_id=next_token_id, university_id=uni.id, ipfs_uri=ipfs_uri)
+        rec = CertificateRecord(token_id=next_token_id, university_id=uni.id, ipfs_uri=metadata_uri)
         db.session.add(rec)
     rec.university_id = uni.id
-    rec.ipfs_uri = ipfs_uri
+    rec.ipfs_uri = metadata_uri
     rec.cert_id = metadata["cert_id"]
     rec.core_hash = core_hash
     rec.status = "prepared"
+    rec.signed_metadata_json = signed_json
+    rec.student_internal_id = student_internal_id
+    rec.student_email = student_email
     commitment = eip712_service.single_mint_commitment(metadata["cert_id"], core_hash)
     mint_request_id = str(uuid.uuid4())
-    nonce = int(uni.eip712_nonce or 0)
+    nonce = int(uni.eip712_single_nonce or 0)
     expiry = eip712_service.default_expiry_unix()
     eip712 = eip712_service.mint_authorization_full_message(
         issuer_address=uni.wallet_address,
@@ -1041,8 +1151,11 @@ def prepare_mint_certificate():
             university_id=uni.id,
             cert_id=metadata["cert_id"],
             core_hash=core_hash,
-            metadata_uri=ipfs_uri,
+            metadata_uri=metadata_uri,
             expected_token_id=next_token_id,
+            student_internal_id=student_internal_id,
+            student_email=student_email,
+            signed_metadata_json=signed_json,
             commitment_hex=Web3.to_hex(commitment),
             nonce_snapshot=nonce,
             expiry_unix=expiry,
@@ -1053,7 +1166,7 @@ def prepare_mint_certificate():
 
     return jsonify(
         {
-            "metadata_uri": ipfs_uri,
+            "metadata_uri": metadata_uri,
             "core_hash": core_hash,
             "cert_id": metadata["cert_id"],
             "next_token_id_hint": next_token_id,
@@ -1098,11 +1211,16 @@ def submit_mint_authorization():
         db.session.commit()
         return jsonify({"error": "Authorization expired; prepare mint again."}), 400
 
-    if int(uni.eip712_nonce or 0) != int(req.nonce_snapshot):
+    if int(uni.eip712_single_nonce or 0) != int(req.nonce_snapshot):
         req.status = "failed"
         req.failure_code = "nonce_mismatch"
         db.session.commit()
-        return jsonify({"error": "Nonce mismatch; prepare a new mint request."}), 409
+        return jsonify(
+            {
+                "error": "Nonce mismatch; prepare a new mint request.",
+                "error_code": "eip712_nonce_mismatch",
+            }
+        ), 409
 
     ch = (req.commitment_hex or "").strip()
     if ch.startswith("0x"):
@@ -1179,13 +1297,26 @@ def submit_mint_authorization():
 
     digest = eip712_service.typed_data_signable_hash_hex(full)
 
+    mint_uri = (req.metadata_uri or "").strip()
+    if (req.signed_metadata_json or "").strip():
+        try:
+            next_tid = int(contract.functions.nextTokenId().call())
+            mint_uri = _public_single_mint_metadata_url(next_tid)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 503
+        req.metadata_uri = mint_uri
+        for cr in CertificateRecord.query.filter_by(cert_id=req.cert_id, university_id=uni.id).all():
+            if (cr.status or "").lower() == "prepared":
+                cr.ipfs_uri = mint_uri
+        db.session.flush()
+
     chain_t0 = time.perf_counter()
     try:
         token_id, tx_hex = blockchain_service.mint_for_issuer(
             w3,
             contract,
             uni.wallet_address,
-            req.metadata_uri,
+            mint_uri,
             req.core_hash,
             req.cert_id,
         )
@@ -1235,9 +1366,12 @@ def submit_mint_authorization():
             token_id=token_id_int,
             university_id=uni.id,
             cert_id=req.cert_id,
-            ipfs_uri=req.metadata_uri,
+            ipfs_uri=mint_uri,
             core_hash=req.core_hash,
             status="issued",
+            signed_metadata_json=req.signed_metadata_json,
+            student_internal_id=req.student_internal_id,
+            student_email=req.student_email,
         )
         db.session.add(rec)
     else:
@@ -1277,15 +1411,20 @@ def submit_mint_authorization():
                         500,
                     )
         rec.token_id = token_id_int
-        rec.ipfs_uri = req.metadata_uri
+        rec.ipfs_uri = mint_uri
         rec.core_hash = req.core_hash
         rec.status = "issued"
+        if (req.signed_metadata_json or "").strip():
+            rec.signed_metadata_json = req.signed_metadata_json
+            rec.student_internal_id = req.student_internal_id or rec.student_internal_id
+            rec.student_email = req.student_email or rec.student_email
     req.status = "minted"
     req.failure_code = None
     req.signature_hex = signature
     req.digest_hex = digest
     req.minter_tx_hash = tx_hex
-    uni.eip712_nonce = int(uni.eip712_nonce or 0) + 1
+    uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
+    sync_uni_eip712_watermark(uni)
 
     h = (tx_hex or "").strip()
     if not h.startswith("0x"):
@@ -1319,7 +1458,7 @@ def submit_mint_authorization():
                         actor=blockchain_service.minter_account_address(),
                         details_json=json.dumps(
                             {
-                                "metadata_uri": req.metadata_uri,
+                                "metadata_uri": mint_uri,
                                 "cert_id": req.cert_id,
                                 "mint_request_id": mint_request_id,
                                 "commitment": req.commitment_hex,
@@ -1879,11 +2018,7 @@ def verify_token(token_id: int):
     offchain: dict[str, Any] | None = None
     if uri:
         try:
-            http_url = _ipfs_uri_to_http(uri)
-            r = requests.get(http_url, timeout=30)
-            r.raise_for_status()
-            offchain = r.json()
-            offchain["_signature"] = _signature_status(offchain)
+            offchain = _fetch_offchain_metadata_from_uri(uri)
         except Exception as e:
             offchain = {"_error": f"Could not fetch metadata: {e!s}"}
 
@@ -1943,12 +2078,12 @@ def verify_by_fields():
     except Exception as e:
         return jsonify({"error": f"Chain read failed: {e!s}"}), 502
     offchain: dict[str, Any] | None = None
-    if onchain.get("exists") and onchain.get("metadata_uri"):
+    from_db = _offchain_metadata_from_certificate_record(rec)
+    if from_db is not None:
+        offchain = from_db
+    elif onchain.get("exists") and onchain.get("metadata_uri"):
         try:
-            rr = requests.get(_ipfs_uri_to_http(onchain["metadata_uri"]), timeout=30)
-            rr.raise_for_status()
-            offchain = rr.json()
-            offchain["_signature"] = _signature_status(offchain)
+            offchain = _fetch_offchain_metadata_from_uri(str(onchain.get("metadata_uri") or ""))
         except Exception as e:
             offchain = {"_error": f"Could not fetch metadata: {e!s}"}
     try:
@@ -2070,6 +2205,17 @@ def verify_explain():
 
     sanitized = _sanitize_verify_explain_payload(payload)
 
+    model_name = (Config.GEMINI_MODEL or "gemini-1.5-flash").strip()
+    cache_key = ai_response_cache.verify_explain_cache_key(sanitized, model_name)
+    cache_ttl = float(Config.GEMINI_VERIFY_EXPLAIN_CACHE_TTL_SECONDS)
+    cache_max = int(Config.GEMINI_VERIFY_EXPLAIN_CACHE_MAX_ENTRIES)
+
+    cached_text = ai_response_cache.get_text(cache_key, max_entries=cache_max)
+    if cached_text is not None:
+        resp = make_response(jsonify({"model": model_name, "text": cached_text}))
+        resp.headers["X-Cache"] = "HIT"
+        return resp
+
     system_instruction = (
         "You help employers and the public read a TruCert verification result. "
         "Output must be exactly two paragraphs separated by one blank line (no markdown, no bullets, no headings). "
@@ -2097,7 +2243,10 @@ def verify_explain():
     except gemini_service.GeminiError as e:
         return jsonify({"error": str(e)}), 503
 
-    return jsonify({"model": (Config.GEMINI_MODEL or "gemini-1.5-flash").strip(), "text": text})
+    ai_response_cache.set_text(cache_key, text, ttl_seconds=cache_ttl, max_entries=cache_max)
+    resp = make_response(jsonify({"model": model_name, "text": text}))
+    resp.headers["X-Cache"] = "MISS"
+    return resp
 
 
 def _risk_hints_payload(
@@ -2147,15 +2296,36 @@ def _risk_hints_payload(
         "You must not recommend automatic enforcement; this is advisory only."
     )
 
+    model_name = (Config.GEMINI_MODEL or "gemini-1.5-flash").strip()
+    flags_for_ai = [{"code": f.get("code"), "severity": f.get("severity"), "detail": f.get("detail")} for f in flags]
+    aggregates_for_ai = {
+        "mint_velocity": metrics.get("mint_velocity"),
+        "revoke": metrics.get("revoke"),
+        "single_mint_auth": metrics.get("single_mint_auth"),
+        "batch": metrics.get("batch"),
+    }
+    risk_cache_key = ai_response_cache.risk_summary_cache_key(
+        university_id=university_id,
+        current_days=current_days,
+        reference_days=reference_days,
+        summary=summary,
+        flags=flags_for_ai,
+        aggregates=aggregates_for_ai,
+        model_name=model_name,
+    )
+    risk_ttl = float(Config.GEMINI_RISK_SUMMARY_CACHE_TTL_SECONDS)
+    risk_max = int(Config.GEMINI_VERIFY_EXPLAIN_CACHE_MAX_ENTRIES)
+
+    cached_risk = ai_response_cache.get_text(risk_cache_key, max_entries=risk_max)
+    if cached_risk is not None:
+        out["ai_summary_text"] = cached_risk
+        out["ai_summary_reason"] = None
+        return out, 200
+
     ai_payload = {
         "summary": summary,
-        "flags": [{"code": f.get("code"), "severity": f.get("severity"), "detail": f.get("detail")} for f in flags],
-        "aggregates": {
-            "mint_velocity": metrics.get("mint_velocity"),
-            "revoke": metrics.get("revoke"),
-            "single_mint_auth": metrics.get("single_mint_auth"),
-            "batch": metrics.get("batch"),
-        },
+        "flags": flags_for_ai,
+        "aggregates": aggregates_for_ai,
         "windows": metrics.get("windows"),
     }
     prompt = (
@@ -2167,6 +2337,13 @@ def _risk_hints_payload(
     try:
         out["ai_summary_text"] = gemini_service.generate_text(prompt, system_instruction=system_instruction)
         out["ai_summary_reason"] = None
+        if out["ai_summary_text"]:
+            ai_response_cache.set_text(
+                risk_cache_key,
+                out["ai_summary_text"],
+                ttl_seconds=risk_ttl,
+                max_entries=risk_max,
+            )
     except gemini_service.GeminiNotConfiguredError:
         out["ai_summary_text"] = None
         out["ai_summary_reason"] = "Gemini not configured"
@@ -2274,6 +2451,32 @@ def mark_notifications_read_all():
     updated = notification_service.mark_all_read(int(user.id))
     db.session.commit()
     return jsonify({"ok": True, "updated": int(updated), "unread_count": 0})
+
+
+@bp.get("/public/metadata/<int:token_id>")
+def public_certificate_metadata(token_id: int):
+    """Serve single-mint (HTTPS tokenURI) or proxy legacy ipfs:// metadata as JSON."""
+    rec = CertificateRecord.query.filter_by(token_id=int(token_id)).first()
+    if not rec:
+        return jsonify({"error": "Not found"}), 404
+    raw = (rec.signed_metadata_json or "").strip()
+    if raw:
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            return jsonify({"error": "Invalid stored metadata"}), 500
+        if not isinstance(obj, dict):
+            return jsonify({"error": "Invalid stored metadata"}), 500
+        return Response(json.dumps(obj, ensure_ascii=False), mimetype="application/json; charset=utf-8")
+    uri = (rec.ipfs_uri or "").strip()
+    if uri.startswith("ipfs://"):
+        try:
+            r = requests.get(_http_url_for_metadata_fetch(uri), timeout=30)
+            r.raise_for_status()
+            return Response(r.text, mimetype="application/json; charset=utf-8")
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
+    return jsonify({"error": "Metadata not available"}), 404
 
 
 @bp.get("/public/config")

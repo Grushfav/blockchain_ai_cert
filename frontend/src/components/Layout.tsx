@@ -7,24 +7,11 @@ import { apiJson } from "../api/client";
 import { BusyLabel } from "./LoadingSpinner";
 import {
   connectInjectedWallet,
+  emitInjectedWalletUpdated,
   friendlyWalletError,
   getInjectedProvider,
   readConnectedAddress,
 } from "../utils/browserWallet";
-
-import {
-  ShieldCheck,
-  BadgeCheck,
-  LayoutDashboard,
-  BarChart3,
-  ShieldAlert,
-  Settings,
-  LogIn,
-  UserPlus,
-  GraduationCap,
-  Bell,
-  ServerCog,
-} from "lucide-react";
 
 function sidebarNavClass(active: boolean) {
   return `app-sidebar__link${active ? " app-sidebar__link--active" : ""}`;
@@ -80,7 +67,7 @@ export function Layout() {
   const universityIssuerMode = Boolean(token && role === "university");
 
   const subtitle =
-    role === "admin" ? "Administration" : role === "university" ? "Institutional node" : "Public protocol access";
+    role === "admin" ? "Administration" : role === "university" ? "Institutional Portal" : "Public protocol access";
 
   async function fetchNotifications() {
     if (!authed) return;
@@ -256,6 +243,7 @@ export function Layout() {
       const { address, chainId } = await connectInjectedWallet(universityIssuerMode);
       setSidebarWallet(address);
       setSidebarWalletChainId(Number(chainId));
+      emitInjectedWalletUpdated();
     } catch (caught: unknown) {
       setSidebarWalletErr(friendlyWalletError(caught));
     } finally {
@@ -267,6 +255,7 @@ export function Layout() {
     setSidebarWallet(null);
     setSidebarWalletChainId(null);
     setSidebarWalletErr(null);
+    emitInjectedWalletUpdated();
   }
 
   function timeAgo(iso: string | null): string {
@@ -313,7 +302,7 @@ export function Layout() {
                 <li>
                   <NavLink to="/verify" className={({ isActive }) => sidebarNavClass(isActive)} onClick={() => setSidebarOpen(false)}>
                     <span className="app-sidebar__icon" aria-hidden>
-                      <ShieldCheck />
+                      ◎
                     </span>
                     <span className="app-sidebar__label">Verify</span>
                   </NavLink>
@@ -321,7 +310,7 @@ export function Layout() {
                 <li>
                   <NavLink to="/claim" className={({ isActive }) => sidebarNavClass(isActive)} onClick={() => setSidebarOpen(false)}>
                     <span className="app-sidebar__icon" aria-hidden>
-                      <BadgeCheck />
+                      ↗
                     </span>
                     <span className="app-sidebar__label">Claim</span>
                   </NavLink>
@@ -334,7 +323,7 @@ export function Layout() {
                 <li>
                   <NavLink to="/login" className={({ isActive }) => sidebarNavClass(isActive)} onClick={() => setSidebarOpen(false)}>
                     <span className="app-sidebar__icon" aria-hidden>
-                      <LogIn />
+                      →
                     </span>
                     <span className="app-sidebar__label">Login</span>
                   </NavLink>
@@ -346,7 +335,7 @@ export function Layout() {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
-                      <UserPlus />
+                      +
                     </span>
                     <span className="app-sidebar__label">Register</span>
                   </NavLink>
@@ -363,9 +352,9 @@ export function Layout() {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
-                      <GraduationCap />
+                      🏛
                     </span>
-                    <span className="app-sidebar__label">Issue</span>
+                    <span className="app-sidebar__label">Mint</span>
                   </NavLink>
                 </li>
                 <li>
@@ -375,7 +364,7 @@ export function Layout() {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
-                      <LayoutDashboard />
+                      ⊞
                     </span>
                     <span className="app-sidebar__label">Overview</span>
                   </NavLink>
@@ -387,7 +376,7 @@ export function Layout() {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
-                      <BarChart3 />
+                      ▤
                     </span>
                     <span className="app-sidebar__label">Analytics</span>
                   </NavLink>
@@ -399,7 +388,7 @@ export function Layout() {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
-                      <ShieldAlert />
+                      🛡
                     </span>
                     <span className="app-sidebar__label">Risk</span>
                   </NavLink>
@@ -411,7 +400,7 @@ export function Layout() {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
-                      <Settings />
+                      ⚙
                     </span>
                     <span className="app-sidebar__label">Settings</span>
                   </NavLink>
@@ -428,7 +417,7 @@ export function Layout() {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
-                      <LayoutDashboard />
+                      ⊞
                     </span>
                     <span className="app-sidebar__label">Overview</span>
                   </NavLink>
@@ -436,7 +425,7 @@ export function Layout() {
                 <li>
                   <NavLink to="/admin" className={({ isActive }) => sidebarNavClass(isActive)} onClick={() => setSidebarOpen(false)}>
                     <span className="app-sidebar__icon" aria-hidden>
-                      <ServerCog />
+                      ⚡
                     </span>
                     <span className="app-sidebar__label">Admin</span>
                   </NavLink>
@@ -448,7 +437,7 @@ export function Layout() {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
-                      <BarChart3 />
+                      ▤
                     </span>
                     <span className="app-sidebar__label">Analytics</span>
                   </NavLink>
@@ -460,7 +449,7 @@ export function Layout() {
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
-                      <ShieldAlert />
+                      🛡
                     </span>
                     <span className="app-sidebar__label">Risk</span>
                   </NavLink>
@@ -553,7 +542,7 @@ export function Layout() {
                   }}
                 >
                   <span aria-hidden style={{ fontSize: "1.05rem" }}>
-                    <Bell size={18} />
+                    🔔
                   </span>
                   {unreadCount > 0 && <span className="notif-badge">{unreadCount > 99 ? "99+" : unreadCount}</span>}
                 </button>

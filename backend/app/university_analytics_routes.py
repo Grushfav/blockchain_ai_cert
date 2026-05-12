@@ -74,7 +74,7 @@ def register_university_analytics_routes(bp: Blueprint) -> None:
                 },
                 "issuance_volume": {
                     "activity_log_action_issued": issuance,
-                    "note": "UTC windows; includes mints once activity sync / indexing has logged them.",
+                    "note": "UTC-5 (America/Panama) windows; includes mints once activity sync / indexing has logged them.",
                 },
                 "reissues": reissues,
                 "eip712": {

@@ -16,7 +16,7 @@ const WEEKDAYS: { value: number; label: string }[] = [
 ];
 
 const COMMON_TIMEZONES = [
-  "UTC",
+  "America/Panama",
   "America/Jamaica",
   "America/New_York",
   "America/Chicago",

@@ -46,8 +46,11 @@ class University(db.Model):
     status = db.Column(db.String(32), nullable=False, default="pending")
     kyc_notes = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    # Monotonic EIP-712 authorization nonce (per university). Incremented when an authorization is consumed.
+    # Legacy unified watermark (kept in sync as max(single, batch, self) for older dashboards).
     eip712_nonce = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    # Separate replay counters so single-mint EIP-712 does not invalidate in-flight batch authorization.
+    eip712_single_nonce = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    eip712_batch_nonce = db.Column(db.Integer, nullable=False, default=0, server_default="0")
 
     # Operational / compliance (admin review; not included in public certificate verify responses).
     expected_mints_monthly = db.Column(db.Integer, nullable=True)
@@ -167,6 +170,10 @@ class CertificateRecord(db.Model):
     status = db.Column(db.String(32), nullable=False, default="issued")
     supersedes_token_id = db.Column(db.Integer, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Single-mint: Ed25519-signed JSON stored in DB (not IPFS). Issuer-only contact keys (not in pinned JSON).
+    signed_metadata_json = db.Column(db.Text, nullable=True)
+    student_internal_id = db.Column(db.String(128), nullable=True)
+    student_email = db.Column(db.String(255), nullable=True)
 
     university = db.relationship("University", back_populates="certificates")
 
@@ -208,6 +215,9 @@ class MintAuthorizationRequest(db.Model):
     core_hash = db.Column(db.String(66), nullable=False)
     metadata_uri = db.Column(db.String(512), nullable=False)
     expected_token_id = db.Column(db.Integer, nullable=False)
+    student_internal_id = db.Column(db.String(128), nullable=True)
+    student_email = db.Column(db.String(255), nullable=True)
+    signed_metadata_json = db.Column(db.Text, nullable=True)
     commitment_hex = db.Column(db.String(66), nullable=False)
     nonce_snapshot = db.Column(db.Integer, nullable=False)
     expiry_unix = db.Column(db.BigInteger, nullable=False)

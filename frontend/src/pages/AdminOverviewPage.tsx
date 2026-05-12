@@ -91,7 +91,7 @@ function peakIssuedHourLabel(hist: number[]): string {
     }
   });
   if (max <= 0) return "—";
-  return `UTC ${idx}:00 (${max} issued)`;
+  return `UTC-5 ${idx}:00 (${max} issued)`;
 }
 
 function mintSeriesPeakInsight(series: { date: string; count: number }[]): string | null {
@@ -101,7 +101,7 @@ function mintSeriesPeakInsight(series: { date: string; count: number }[]): strin
     if (p.count > best.count) best = p;
   }
   if (best.count <= 0) return null;
-  return `Busiest UTC day in this window: ${best.date} (${best.count.toLocaleString()} mints).`;
+  return `Busiest UTC-5 day in this window: ${best.date} (${best.count.toLocaleString()} mints).`;
 }
 
 function formatCompactCount(n: number): string {
@@ -310,14 +310,14 @@ export function AdminOverviewPage() {
       <section className="panel admin-overview__trust" aria-labelledby="admin-overview-trust-heading">
         <div className="admin-overview__trust-head">
           <h2 id="admin-overview-trust-heading" className="admin-overview__trust-title">
-            Platform / trust anchor
+            Platform - Trust anchor
           </h2>
           <Link to="/#trust-panel" className="btn-text admin-overview__trust-site-link">
             View full trust copy on site
           </Link>
         </div>
         <p className="muted-inline small admin-overview__trust-lede">
-          Public <code className="mono">/api/public/config</code> — same values verifiers see on the home trust panel.
+        
         </p>
         {trustLoading && (
           <div className="ai-summary__loading" role="status" aria-live="polite">
@@ -429,14 +429,14 @@ export function AdminOverviewPage() {
           {!mint7Err && mint7Series.length > 0 && mint7dTotal !== null && (
             <div className="mint-snapshot-card mint-snapshot-card--hero">
               <div className="mint-snapshot-card__body">
-                <span className="mint-snapshot-card__kicker">Mints last 7d (UTC)</span>
+                <span className="mint-snapshot-card__kicker">Mints last 7d (UTC-5)</span>
                 <p className="mint-snapshot-card__hero-value">{mint7dTotal.toLocaleString()}</p>
                 {mintInsight ? (
                   <p className="mint-snapshot-card__insight">
                     <em>{mintInsight}</em>
                   </p>
                 ) : (
-                  <p className="mint-snapshot-card__sub">Indexed activity log · one bar per UTC day</p>
+                  <p className="mint-snapshot-card__sub">Indexed activity log · one bar per UTC-5 day</p>
                 )}
                 <p className="mint-snapshot-card__link">
                   <Link to="/admin/analytics">View analytics →</Link>
@@ -448,7 +448,7 @@ export function AdminOverviewPage() {
             </div>
           )}
           {!mint7Err && mint7Series.length === 0 && summary && (
-            <p className="muted-inline small">No indexed mints in the last 7 UTC days.</p>
+            <p className="muted-inline small">No indexed mints in the last 7 UTC-5 days.</p>
           )}
         </section>
 
@@ -467,7 +467,7 @@ export function AdminOverviewPage() {
                   className={`tab ghost${digestPeriod === "today" ? " active" : ""}`}
                   onClick={() => setDigestPeriod("today")}
                 >
-                  Today (UTC day)
+                  Today (UTC-5 day)
                 </button>
                 <button
                   type="button"
@@ -550,7 +550,7 @@ export function AdminOverviewPage() {
                     {digestSlice.failures.mint_batch_rows_mint_failed_touched ?? 0}
                   </li>
                   <li>
-                    Peak issued hour ({digestPeriod === "today" ? "this UTC day" : "rolling 7d"}):{" "}
+                    Peak issued hour ({digestPeriod === "today" ? "this UTC-5 day" : "rolling 7d"}):{" "}
                     {peakIssuedHourLabel(digestSlice.issued_mint_hour_histogram_utc)}
                   </li>
                   <li>
@@ -605,7 +605,7 @@ export function AdminOverviewPage() {
       {summary && (
         <section className="panel admin-analytics-grid admin-overview__snapshot">
           <h2>Platform snapshot</h2>
-          <p className="muted-inline small">Generated {new Date(summary.generated_at_utc).toLocaleString()} (UTC field)</p>
+          <p className="muted-inline small">Generated {new Date(summary.generated_at_utc).toLocaleString()} (API timestamp field)</p>
           <div className="stat-cards stat-cards--overview">
             <div className="stat-card stat-card--accent-blue">
               <span className="stat-label">Institutions</span>
@@ -622,7 +622,7 @@ export function AdminOverviewPage() {
               </span>
             </div>
             <div className="stat-card">
-              <span className="stat-label">Mints today (UTC)</span>
+              <span className="stat-label">Mints today (UTC-5)</span>
               <span className="stat-value stat-value--accent">
                 {summary.issuance_volume.activity_log_action_issued.today.toLocaleString()}
               </span>

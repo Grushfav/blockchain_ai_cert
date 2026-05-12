@@ -6,8 +6,19 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import Date, cast, exists, func
+from sqlalchemy import exists, func
 
+from app.analytics_timezone import (
+    DISPLAY_TZ_LABEL,
+    DISPLAY_ZONE,
+    app_day_end_exclusive_utc_naive,
+    app_day_start_utc_naive,
+    app_month_start_utc_naive,
+    app_week_start_monday_utc_naive,
+    app_yesterday_start_utc_naive,
+    local_weekday_and_hour_from_utc_naive_event,
+    to_display_zoned,
+)
 from app.extensions import db
 from app.models import (
     ActivityLog,
@@ -19,39 +30,29 @@ from app.models import (
 )
 
 
-def _utc_day_start(now: datetime) -> datetime:
-    return now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-
-def _utc_week_start_monday(now: datetime) -> datetime:
-    d0 = _utc_day_start(now)
-    return d0 - timedelta(days=d0.weekday())
-
-
-def _utc_month_start(now: datetime) -> datetime:
-    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-
 def _activity_ts_column():
     """Prefer block time when present (synced on-chain events)."""
     return func.coalesce(ActivityLog.block_timestamp, ActivityLog.created_at)
 
 
 def _activity_day_bucket_expr(ts_col):
-    """UTC calendar date label YYYY-MM-DD for grouping (SQLite vs PostgreSQL)."""
+    """Calendar date YYYY-MM-DD in DISPLAY_ZONE for grouping (SQLite vs PostgreSQL)."""
     bind = db.session.get_bind()
     dialect = bind.dialect.name if bind else "sqlite"
     if dialect == "postgresql":
-        return cast(ts_col, Date)
-    return func.strftime("%Y-%m-%d", ts_col)
+        return func.to_char(
+            func.timezone("America/Panama", func.timezone("UTC", ts_col)),
+            "YYYY-MM-DD",
+        )
+    return func.strftime("%Y-%m-%d", func.datetime(ts_col, "-5 hours"))
 
 
 def issuance_counts_by_window(now: datetime | None = None) -> dict[str, int]:
-    """Counts ActivityLog rows with action ``issued`` in each window (UTC)."""
+    """Counts ActivityLog rows with action ``issued`` in each window (calendar day/week/month in UTC-5)."""
     now = now or datetime.utcnow()
-    day0 = _utc_day_start(now)
-    week0 = _utc_week_start_monday(now)
-    month0 = _utc_month_start(now)
+    day0 = app_day_start_utc_naive(now)
+    week0 = app_week_start_monday_utc_naive(now)
+    month0 = app_month_start_utc_naive(now)
     ts = _activity_ts_column()
     q = ActivityLog.query.filter(ActivityLog.action == "issued")
     today = q.filter(ts >= day0).count()
@@ -61,7 +62,7 @@ def issuance_counts_by_window(now: datetime | None = None) -> dict[str, int]:
 
 
 def activity_counts_by_action_since_days(days: int = 7, now: datetime | None = None) -> dict[str, int]:
-    """Count ActivityLog rows per ``action`` in the last ``days`` UTC-day window (coalesced on-chain/local time)."""
+    """Count ActivityLog rows per ``action`` in the last ``days`` (rolling wall-clock from naive UTC timestamps)."""
     now = now or datetime.utcnow()
     start = now - timedelta(days=max(1, int(days)))
     ts = _activity_ts_column()
@@ -177,9 +178,9 @@ def mint_batch_last_tx(batch_id: int) -> str | None:
 
 def issuance_counts_by_window_for_university(university_id: int, now: datetime | None = None) -> dict[str, int]:
     now = now or datetime.utcnow()
-    day0 = _utc_day_start(now)
-    week0 = _utc_week_start_monday(now)
-    month0 = _utc_month_start(now)
+    day0 = app_day_start_utc_naive(now)
+    week0 = app_week_start_monday_utc_naive(now)
+    month0 = app_month_start_utc_naive(now)
     ts = _activity_ts_column()
     q = ActivityLog.query.filter(
         ActivityLog.action == "issued",
@@ -471,7 +472,7 @@ def _issued_count_half_open(start: datetime, end: datetime) -> int:
 
 
 def _issued_hour_histogram_utc(start: datetime, end: datetime) -> list[int]:
-    """24-length array index 0..23 = UTC hour of coalesced ActivityLog time for ``issued`` only."""
+    """24-length array index 0..23 = clock hour in UTC-5 (America/Panama) for ``issued`` only."""
     hist = [0] * 24
     ts_expr = func.coalesce(ActivityLog.block_timestamp, ActivityLog.created_at)
     rows = (
@@ -487,9 +488,8 @@ def _issued_hour_histogram_utc(start: datetime, end: datetime) -> list[int]:
         t = block_ts or created_at
         if not t:
             continue
-        if t.tzinfo is not None:
-            t = t.astimezone(timezone.utc).replace(tzinfo=None)
-        hist[int(t.hour) % 24] += 1
+        _wd, hr = local_weekday_and_hour_from_utc_naive_event(t)
+        hist[int(hr) % 24] += 1
     return hist
 
 
@@ -651,8 +651,8 @@ def _failures_bundle(start: datetime, end: datetime) -> dict[str, Any]:
 
 
 def _trend_issued_bundle(now_naive: datetime) -> dict[str, Any]:
-    day0 = _utc_day_start(now_naive)
-    y0 = day0 - timedelta(days=1)
+    day0 = app_day_start_utc_naive(now_naive)
+    y0 = app_yesterday_start_utc_naive(now_naive)
     issued_today = _issued_count_in_range(day0, now_naive)
     issued_yesterday = _issued_count_half_open(y0, day0)
     w0 = now_naive - timedelta(days=7)
@@ -675,25 +675,30 @@ def mint_timeseries_filled_days(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """
-    Daily ``issued`` ActivityLog counts in UTC calendar days (bucket = date of coalesced time).
+    Daily ``issued`` ActivityLog counts in UTC-5 calendar days (bucket = local date of coalesced UTC time).
 
-    ``days`` must be 7, 30, or 90 (others clamped to 30). Series covers ``days`` consecutive UTC days
-    ending on the current UTC calendar day, inclusive, with missing days as count 0.
+    ``days`` must be 7, 30, or 90 (others clamped to 30). Series covers ``days`` consecutive local days
+    ending on the current local calendar day, with missing days as count 0.
     """
     d = int(days)
     if d not in (7, 30, 90):
         d = 30
     now_naive = _digest_naive_utc(now)
-    day_end_exclusive = _utc_day_start(now_naive) + timedelta(days=1)
-    day_start_first = day_end_exclusive - timedelta(days=d)
+    z_now = to_display_zoned(now_naive)
+    local_end_date = z_now.date()
+    local_start_date = local_end_date - timedelta(days=d - 1)
+    ts_lo = datetime.combine(local_start_date, datetime.min.time(), tzinfo=DISPLAY_ZONE).astimezone(timezone.utc).replace(
+        tzinfo=None
+    )
+    ts_hi = app_day_end_exclusive_utc_naive(now_naive)
     ts = _activity_ts_column()
     day_bucket = _activity_day_bucket_expr(ts)
     q = (
         db.session.query(day_bucket, func.count(ActivityLog.id))
         .filter(
             ActivityLog.action == "issued",
-            ts >= day_start_first,
-            ts < day_end_exclusive,
+            ts >= ts_lo,
+            ts < ts_hi,
         )
     )
     if university_id is not None:
@@ -710,14 +715,14 @@ def mint_timeseries_filled_days(
         counts[str(ds)] = int(n)
 
     series: list[dict[str, Any]] = []
-    cur = day_start_first.date()
+    cur = local_start_date
     for _ in range(d):
         ds = cur.isoformat()
         series.append({"date": ds, "count": counts.get(ds, 0)})
         cur = cur + timedelta(days=1)
     total = sum(int(x["count"]) for x in series)
     return {
-        "timezone": "UTC",
+        "timezone": DISPLAY_TZ_LABEL,
         "days": d,
         "university_id": university_id,
         "series": series,
@@ -731,22 +736,27 @@ def mint_heatmap_weekday_hour_utc(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """
-    Sparse heatmap cells for ``issued`` events: ``weekday`` Monday=0..Sunday=6, ``hour`` 0–23 UTC,
+    Sparse heatmap cells for ``issued`` events: ``weekday`` Monday=0..Sunday=6, ``hour`` 0–23 in UTC-5,
     from coalesce(block_timestamp, created_at). ``days`` is 30 or 90 (default 90).
     """
     d = int(days)
     if d not in (30, 90):
         d = 90
     now_naive = _digest_naive_utc(now)
-    day_end_exclusive = _utc_day_start(now_naive) + timedelta(days=1)
-    day_start_first = day_end_exclusive - timedelta(days=d)
+    z_now = to_display_zoned(now_naive)
+    local_end_date = z_now.date()
+    local_start_date = local_end_date - timedelta(days=d - 1)
+    ts_lo = datetime.combine(local_start_date, datetime.min.time(), tzinfo=DISPLAY_ZONE).astimezone(timezone.utc).replace(
+        tzinfo=None
+    )
+    ts_hi = app_day_end_exclusive_utc_naive(now_naive)
     ts = _activity_ts_column()
     rows = (
         ActivityLog.query.filter(
             ActivityLog.action == "issued",
             ActivityLog.university_id == university_id,
-            ts >= day_start_first,
-            ts < day_end_exclusive,
+            ts >= ts_lo,
+            ts < ts_hi,
         )
         .with_entities(ActivityLog.block_timestamp, ActivityLog.created_at)
         .all()
@@ -756,38 +766,40 @@ def mint_heatmap_weekday_hour_utc(
         t = block_ts or created_at
         if not t:
             continue
-        if t.tzinfo is not None:
-            t = t.astimezone(timezone.utc).replace(tzinfo=None)
-        wd = int(t.weekday())
-        hr = int(t.hour) % 24
+        wd, hr = local_weekday_and_hour_from_utc_naive_event(t)
         k = (wd, hr)
         cells_map[k] = cells_map.get(k, 0) + 1
     cells = [{"weekday": wd, "hour": hr, "count": c} for (wd, hr), c in sorted(cells_map.items())]
     return {
-        "timezone": "UTC",
+        "timezone": DISPLAY_TZ_LABEL,
         "days": d,
         "university_id": university_id,
-        "weekday_note": "weekday is Monday=0 through Sunday=6 (Python datetime.weekday(), UTC wall clock).",
-        "hour_note": "hour is 0–23 UTC.",
+        "weekday_note": f"weekday is Monday=0 through Sunday=6 in {DISPLAY_TZ_LABEL} (from coalesced event time).",
+        "hour_note": f"hour is 0–23 in {DISPLAY_TZ_LABEL}.",
         "cells": cells,
     }
 
 
 def mints_by_institution_last_days(days: int, now: datetime | None = None) -> list[dict[str, Any]]:
-    """Per-institution ``issued`` counts in the last ``days`` UTC calendar days (inclusive of today)."""
+    """Per-institution ``issued`` counts in the last ``days`` UTC-5 calendar days (inclusive of today local)."""
     d = int(days)
     d = max(7, min(366, d))
     now_naive = _digest_naive_utc(now)
-    day_end_exclusive = _utc_day_start(now_naive) + timedelta(days=1)
-    day_start_first = day_end_exclusive - timedelta(days=d)
+    z_now = to_display_zoned(now_naive)
+    local_end_date = z_now.date()
+    local_start_date = local_end_date - timedelta(days=d - 1)
+    ts_lo = datetime.combine(local_start_date, datetime.min.time(), tzinfo=DISPLAY_ZONE).astimezone(timezone.utc).replace(
+        tzinfo=None
+    )
+    ts_hi = app_day_end_exclusive_utc_naive(now_naive)
     ts = _activity_ts_column()
     rows = (
         db.session.query(ActivityLog.university_id, func.count(ActivityLog.id))
         .filter(
             ActivityLog.action == "issued",
             ActivityLog.university_id.isnot(None),
-            ts >= day_start_first,
-            ts < day_end_exclusive,
+            ts >= ts_lo,
+            ts < ts_hi,
         )
         .group_by(ActivityLog.university_id)
         .order_by(func.count(ActivityLog.id).desc())
@@ -818,12 +830,12 @@ def platform_operations_digest_metrics(*, now: datetime | None = None) -> dict[s
     """
     Platform-wide aggregates for admin operations digest (no PII, no per-student fields).
 
-    Windows (all timestamps naive UTC aligned with DB):
-    - ``today``: inclusive from UTC calendar day 00:00 through ``now``.
+    Windows (DB timestamps are naive UTC; reporting day boundaries use UTC-5 / America/Panama):
+    - ``today``: inclusive from local calendar day 00:00 through ``now``.
     - ``rolling_7d``: inclusive ``now - 7 days`` through ``now`` (rolling 168h, not ISO week).
     """
     now_naive = _digest_naive_utc(now)
-    day0 = _utc_day_start(now_naive)
+    day0 = app_day_start_utc_naive(now_naive)
     week0 = now_naive - timedelta(days=7)
 
     today_start, today_end = day0, now_naive
@@ -841,9 +853,9 @@ def platform_operations_digest_metrics(*, now: datetime | None = None) -> dict[s
     return {
         "documentation": {
             "activity_log_event_time": "coalesce(block_timestamp, created_at) for ActivityLog filters and histograms.",
-            "utc_today_window": "[UTC calendar day 00:00, now] inclusive on that coalesced time.",
+            "utc5_today_window": f"[{DISPLAY_TZ_LABEL} calendar day 00:00, now] inclusive on coalesced UTC-stored time.",
             "rolling_7d_window": "[now - 7 calendar days, now] inclusive (not ISO week).",
-            "trend_yesterday_mints": "[previous UTC day 00:00, today 00:00) half-open on coalesced time.",
+            "trend_yesterday_mints": f"[previous {DISPLAY_TZ_LABEL} day 00:00, today 00:00) half-open on coalesced time.",
             "trend_prior_7d_mints": "[now-14d, now-7d) half-open vs [now-7d, now] for issued counts.",
             "mar_failed_time": "coalesce(completed_at, created_at) for MintAuthorizationRequest status=failed.",
             "mint_failed_row_touch_time": (

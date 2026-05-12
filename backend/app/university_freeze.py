@@ -30,3 +30,12 @@ def freeze_guard_response(uni: "University | None") -> tuple[Response, int] | No
         ),
         403,
     )
+
+
+def sync_uni_eip712_watermark(uni: "University") -> None:
+    """Keep legacy ``eip712_nonce`` at least as high as the split single/batch counters (dashboards / old clients)."""
+    uni.eip712_nonce = max(
+        int(uni.eip712_nonce or 0),
+        int(getattr(uni, "eip712_single_nonce", 0) or 0),
+        int(getattr(uni, "eip712_batch_nonce", 0) or 0),
+    )

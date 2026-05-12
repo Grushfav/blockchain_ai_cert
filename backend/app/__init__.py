@@ -100,6 +100,12 @@ def _apply_lightweight_migrations() -> None:
         statements.append("ALTER TABLE certificate_records ADD COLUMN status VARCHAR(32) DEFAULT 'issued'")
     if "supersedes_token_id" not in cols:
         statements.append("ALTER TABLE certificate_records ADD COLUMN supersedes_token_id INTEGER")
+    if "signed_metadata_json" not in cols:
+        statements.append("ALTER TABLE certificate_records ADD COLUMN signed_metadata_json TEXT")
+    if "student_internal_id" not in cols:
+        statements.append("ALTER TABLE certificate_records ADD COLUMN student_internal_id VARCHAR(128)")
+    if "student_email" not in cols:
+        statements.append("ALTER TABLE certificate_records ADD COLUMN student_email VARCHAR(255)")
 
     uni_cols = {c["name"] for c in inspector.get_columns("universities")}
     if "logo_uri" not in uni_cols:
@@ -125,6 +131,13 @@ def _apply_lightweight_migrations() -> None:
 
     if "eip712_nonce" not in uni_cols:
         statements.append("ALTER TABLE universities ADD COLUMN eip712_nonce INTEGER DEFAULT 0")
+    added_eip712_split = False
+    if "eip712_single_nonce" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN eip712_single_nonce INTEGER DEFAULT 0")
+        added_eip712_split = True
+    if "eip712_batch_nonce" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN eip712_batch_nonce INTEGER DEFAULT 0")
+        added_eip712_split = True
     if "expected_mints_monthly" not in uni_cols:
         statements.append("ALTER TABLE universities ADD COLUMN expected_mints_monthly INTEGER")
     if "expected_mints_annually" not in uni_cols:
@@ -186,6 +199,12 @@ def _apply_lightweight_migrations() -> None:
             statements.append("ALTER TABLE mint_authorization_requests ADD COLUMN prepare_to_complete_ms INTEGER")
         if "platform_mint_ms" not in mar_cols:
             statements.append("ALTER TABLE mint_authorization_requests ADD COLUMN platform_mint_ms INTEGER")
+        if "student_internal_id" not in mar_cols:
+            statements.append("ALTER TABLE mint_authorization_requests ADD COLUMN student_internal_id VARCHAR(128)")
+        if "student_email" not in mar_cols:
+            statements.append("ALTER TABLE mint_authorization_requests ADD COLUMN student_email VARCHAR(255)")
+        if "signed_metadata_json" not in mar_cols:
+            statements.append("ALTER TABLE mint_authorization_requests ADD COLUMN signed_metadata_json TEXT")
 
     with db.engine.begin() as conn:
         for stmt in statements:
@@ -195,6 +214,15 @@ def _apply_lightweight_migrations() -> None:
                 if "DROP COLUMN" in stmt:
                     continue
                 raise
+
+    if added_eip712_split:
+        with db.engine.begin() as conn:
+            conn.execute(
+                text(
+                    "UPDATE universities SET eip712_single_nonce = COALESCE(eip712_nonce, 0), "
+                    "eip712_batch_nonce = COALESCE(eip712_nonce, 0)"
+                )
+            )
 
     # PostgreSQL: legacy is_frozen INTEGER (SQLite-era lightweight migration) vs SQLAlchemy Boolean.
     if db.engine.dialect.name == "postgresql":

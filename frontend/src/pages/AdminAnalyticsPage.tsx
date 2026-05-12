@@ -446,7 +446,7 @@ export function AdminAnalyticsPage() {
             <p className="muted-inline small">{summary.issuance_volume.note}</p>
             <div className="stat-cards">
               <div className="stat-card">
-                <span className="stat-label">Today (UTC)</span>
+                <span className="stat-label">Today (UTC-5)</span>
                 <span className="stat-value">{summary.issuance_volume.activity_log_action_issued.today}</span>
               </div>
               <div className="stat-card">
@@ -463,7 +463,7 @@ export function AdminAnalyticsPage() {
           <section className="panel admin-analytics-grid" aria-labelledby="admin-mint-ts-heading">
             <div className="admin-analytics__section-head">
               <h2 id="admin-mint-ts-heading" className="admin-analytics__section-title">
-                Mints per day (UTC)
+                Mints per day (UTC-5)
                 {filterUniversityId != null ? (
                   <span className="muted-inline small admin-analytics__section-sub">
                     Scoped to selected institution
@@ -496,7 +496,7 @@ export function AdminAnalyticsPage() {
               </div>
             </div>
             <p className="muted-inline small admin-analytics__section-lede">
-              Activity log <code>issued</code> rows; daily bucket in UTC (axes labeled UTC).
+              Activity log <code>issued</code> rows; daily bucket in UTC-5 (axes labeled UTC-5).
             </p>
             {adminMintErr && <div className="error">{adminMintErr}</div>}
             {adminMintLoading && !adminMintErr && <p className="muted-inline">Loading chart…</p>}
@@ -510,7 +510,7 @@ export function AdminAnalyticsPage() {
               </>
             )}
             {!adminMintLoading && !adminMintErr && adminMintSeries.length === 0 && (
-              <p className="muted-inline">No indexed mints in this UTC window.</p>
+              <p className="muted-inline">No indexed mints in this UTC-5 window.</p>
             )}
           </section>
 
@@ -538,7 +538,7 @@ export function AdminAnalyticsPage() {
                 </div>
               </div>
               <p className="muted-inline small admin-analytics__section-lede">
-                Sortable table of indexed mint counts per institution (UTC window). Use charts above for trends.
+                Sortable table of indexed mint counts per institution (UTC-5 window). Use charts above for trends.
               </p>
               {byInstErr && <div className="error">{byInstErr}</div>}
               {byInstLoading && !byInstErr && <p className="muted-inline">Loading…</p>}
@@ -592,7 +592,7 @@ export function AdminAnalyticsPage() {
                             }
                           }}
                         >
-                          Mints ({byInstDays}d UTC)
+                          Mints ({byInstDays}d UTC-5)
                         </button>
                       </th>
                     </tr>

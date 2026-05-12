@@ -392,7 +392,7 @@ export function UniversityAnalyticsPage() {
             <p className="muted-inline small">{summary.issuance_volume.note}</p>
             <div className="stat-cards">
               <div className="stat-card">
-                <span className="stat-label">Today (UTC)</span>
+                <span className="stat-label">Today (UTC-5)</span>
                 <span className="stat-value">{summary.issuance_volume.activity_log_action_issued.today}</span>
               </div>
               <div className="stat-card">
@@ -409,7 +409,7 @@ export function UniversityAnalyticsPage() {
           <section className="panel inst-dashboard-panel" aria-labelledby="inst-mint-chart-heading">
             <div className="inst-card-head" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: "0.5rem" }}>
               <h2 id="inst-mint-chart-heading" className="inst-card-title">
-                Issues per day (UTC)
+                Issues per day (UTC-5)
               </h2>
               <div className="admin-ops-digest__tabs" role="tablist" aria-label="Mint chart window">
                 <button
@@ -433,8 +433,8 @@ export function UniversityAnalyticsPage() {
               </div>
             </div>
             <p className="muted-inline small" style={{ marginTop: 0 }}>
-              Indexed <code>issued</code> activity events; bucket date is UTC from block time or record time. Axes labeled
-              UTC.
+              Indexed <code>issued</code> activity events; bucket date is UTC-5 (America/Panama) from stored UTC times.
+              Axes labeled UTC-5.
             </p>
             {mintErr && <div className="error">{mintErr}</div>}
             {mintLoading && !mintErr && <p className="muted-inline">Loading chart…</p>}
@@ -447,14 +447,14 @@ export function UniversityAnalyticsPage() {
               </>
             )}
             {!mintLoading && !mintErr && mintSeries.length === 0 && (
-              <p className="muted-inline">No indexed mints in this UTC window.</p>
+              <p className="muted-inline">No indexed mints in this UTC-5 window.</p>
             )}
           </section>
 
           <section className="panel inst-dashboard-panel" aria-labelledby="inst-mint-heat-heading">
             <div className="inst-card-head" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: "0.5rem" }}>
               <h2 id="inst-mint-heat-heading" className="inst-card-title">
-                Mint timing heatmap (UTC)
+                Mint timing heatmap (UTC-5)
               </h2>
               <div className="admin-ops-digest__tabs" role="tablist" aria-label="Heatmap window">
                 <button
@@ -478,7 +478,7 @@ export function UniversityAnalyticsPage() {
               </div>
             </div>
             <p className="muted-inline small" style={{ marginTop: 0 }}>
-              Weekday × hour of day for indexed isuues. Rows Mon→Sun; columns hour UTC (0–23).
+              Weekday × hour of day for indexed issues. Rows Mon→Sun; columns hour UTC-5 (0–23).
             </p>
             {heatErr && <div className="error">{heatErr}</div>}
             {heatLoading && !heatErr && <p className="muted-inline">Loading heatmap…</p>}

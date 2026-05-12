@@ -38,7 +38,7 @@ export function MintTimeseriesLineChart({
             textAnchor={dense ? "end" : "middle"}
             height={dense ? 48 : 32}
             interval="preserveStartEnd"
-            label={{ value: "Date (UTC)", position: "insideBottom", offset: dense ? -18 : -10, fill: "var(--muted)", fontSize: 11 }}
+            label={{ value: "Date (UTC-5)", position: "insideBottom", offset: dense ? -18 : -10, fill: "var(--muted)", fontSize: 11 }}
           />
           <YAxis
             tick={{ fill: "var(--muted)", fontSize: 10 }}
@@ -50,7 +50,7 @@ export function MintTimeseriesLineChart({
             contentStyle={tooltipStyle}
             labelStyle={{ color: "var(--text)" }}
             formatter={(value: number | string) => [value, "Mints"]}
-            labelFormatter={(label) => `${label} (UTC)`}
+            labelFormatter={(label) => `${label} (UTC-5)`}
           />
           <Line
             type="monotone"
@@ -75,7 +75,7 @@ export function MintHeatmapGrid({ cells }: { cells: { weekday: number; hour: num
   }
   const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   return (
-    <div className="mint-heatmap" role="img" aria-label="Indexed mint events by weekday and hour UTC">
+    <div className="mint-heatmap" role="img" aria-label="Indexed mint events by weekday and hour UTC-5">
       <div className="mint-heatmap__axis-x" aria-hidden>
         <span className="mint-heatmap__corner" />
         {Array.from({ length: 24 }, (_, h) => (
@@ -91,7 +91,7 @@ export function MintHeatmapGrid({ cells }: { cells: { weekday: number; hour: num
             <span
               key={hi}
               className="mint-heatmap__cell"
-              title={`${dayLabels[wi]} ${hi}:00 UTC — ${cnt} mint(s)`}
+              title={`${dayLabels[wi]} ${hi}:00 UTC-5 — ${cnt} mint(s)`}
               style={{
                 background: "var(--accent)",
                 opacity: cnt <= 0 ? 0.08 : 0.12 + (0.88 * cnt) / max,
@@ -112,7 +112,7 @@ export function MintMiniBars({ series }: { series: MintDayPoint[] }) {
       {series.map((p) => {
         const isPeak = peakCount > 0 && p.count === peakCount;
         return (
-          <div key={p.date} className="mint-mini-bars__cell" title={`${p.date} UTC: ${p.count}`}>
+          <div key={p.date} className="mint-mini-bars__cell" title={`${p.date} UTC-5: ${p.count}`}>
             <div
               className={`mint-mini-bars__bar${isPeak ? " mint-mini-bars__bar--peak" : ""}`}
               style={{ height: `${Math.max(4, (p.count / max) * 100)}%` }}

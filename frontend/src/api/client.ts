@@ -34,6 +34,18 @@ type ApiOptions = {
   headers?: HeadersInit;
 };
 
+/** Thrown by {@link apiJson} / {@link apiFormData} on non-OK responses when the body is JSON. */
+export class ApiHttpError extends Error {
+  readonly status: number;
+  readonly errorCode?: string;
+  constructor(message: string, status: number, errorCode?: string) {
+    super(message);
+    this.name = "ApiHttpError";
+    this.status = status;
+    this.errorCode = errorCode;
+  }
+}
+
 export async function apiJson<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const { method = "GET", json, headers: hdrs } = options;
   const headers: Record<string, string> = { ...(hdrs as Record<string, string>) };
@@ -46,7 +58,7 @@ export async function apiJson<T>(path: string, options: ApiOptions = {}): Promis
     headers,
     body: json !== undefined ? JSON.stringify(json) : undefined,
   });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; error_code?: string };
   if (!res.ok) {
     if (res.status === 404) {
       throw new Error(
@@ -56,7 +68,7 @@ export async function apiJson<T>(path: string, options: ApiOptions = {}): Promis
       );
     }
     const msg = data.error || res.statusText || "Request failed";
-    throw new Error(msg);
+    throw new ApiHttpError(msg, res.status, data.error_code);
   }
   return data as T;
 }
@@ -69,10 +81,10 @@ export async function apiFormData<T>(path: string, form: FormData, options: { me
   const token = getStoredToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${API_BASE}${path}`, { method, headers, body: form });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; error_code?: string };
   if (!res.ok) {
     const msg = data.error || res.statusText || "Request failed";
-    throw new Error(msg);
+    throw new ApiHttpError(msg, res.status, data.error_code);
   }
   return data as T;
 }

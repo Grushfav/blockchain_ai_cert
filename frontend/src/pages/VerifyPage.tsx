@@ -171,12 +171,45 @@ export function VerifyPage() {
   const [certId, setCertId] = useState("");
   const [issueDate, setIssueDate] = useState("");
 
+  const [verifiedInstitutions, setVerifiedInstitutions] = useState<{ id: number; name: string }[]>([]);
+  const [instListLoading, setInstListLoading] = useState(true);
+  const [instListErr, setInstListErr] = useState<string | null>(null);
+
   const fieldsNoMatch = Boolean(fieldResult && !fieldResult.matched);
 
   useEffect(() => {
     if (window.location.hash.replace(/^#/, "") === "by-token") {
       setShowTokenFallback(true);
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setInstListLoading(true);
+    setInstListErr(null);
+    void (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/public/verified-universities`);
+        const data = (await res.json()) as { universities?: { id?: number; name?: string }[]; error?: string };
+        if (!res.ok) {
+          throw new Error(data.error || res.statusText || "Request failed");
+        }
+        const list = (data.universities ?? [])
+          .map((u) => ({ id: Number(u.id), name: String(u.name ?? "").trim() }))
+          .filter((u) => Number.isFinite(u.id) && u.name.length > 0);
+        if (!cancelled) setVerifiedInstitutions(list);
+      } catch (e) {
+        if (!cancelled) {
+          setVerifiedInstitutions([]);
+          setInstListErr(e instanceof Error ? e.message : "Could not load institution list");
+        }
+      } finally {
+        if (!cancelled) setInstListLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -232,6 +265,11 @@ export function VerifyPage() {
     setFieldResult(null);
     setTokenErr(null);
     setTokenResult(null);
+    const dateTrim = issueDate.trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateTrim)) {
+      setFieldErr("Issue date must be exactly YYYY-MM-DD (e.g. 2026-05-02).");
+      return;
+    }
     setFieldLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/verify/fields`, {
@@ -242,7 +280,7 @@ export function VerifyPage() {
           student_name: studentName,
           degree_type: degreeType,
           cert_id: certId,
-          issue_date: issueDate,
+          issue_date: dateTrim,
         }),
       });
       const data = (await res.json()) as FieldVerifyResponse & { error?: string };
@@ -251,7 +289,7 @@ export function VerifyPage() {
         if ((data.error || "").toLowerCase().includes("indexed hash")) {
           msg =
             `${msg}. Check that issue date is the exact issued value in YYYY-MM-DD ` +
-            `(submitted: ${issueDate || "empty"}).`;
+            `(submitted: ${dateTrim || "empty"}).`;
         }
         setFieldErr(msg);
         setShowTokenFallback(true);
@@ -292,24 +330,55 @@ export function VerifyPage() {
           </h2>
         </div>
         <p className="verify-mock-panel__hint muted-inline small">
-          Values must match issued certificate formatting exactly (including issue date as YYYY-MM-DD).
+          Choose your verified issuing institution when available; other values must match the credential exactly (issue date
+          as YYYY-MM-DD).
         </p>
         <form className="stack verify-form verify-form--mock" onSubmit={verifyByFields}>
           <div className="row two-col verify-mock-two-col">
             <div className="inst-field">
-              <label htmlFor="vf_inst">Institution name</label>
+              <label htmlFor="vf_inst">Institution</label>
               <div className="inst-input-wrap">
                 <span className="inst-input-icon" aria-hidden>
                   <Building />
                 </span>
-                <input
-                  id="vf_inst"
-                  placeholder="e.g. Massachusetts Institute of Technology"
-                  value={institutionName}
-                  onChange={(e) => setInstitutionName(e.target.value)}
-                  required
-                />
+                {instListLoading ? (
+                  <input
+                    id="vf_inst"
+                    disabled
+                    readOnly
+                    value=""
+                    placeholder="Loading verified issuers…"
+                    aria-busy="true"
+                  />
+                ) : verifiedInstitutions.length > 0 ? (
+                  <select
+                    id="vf_inst"
+                    value={institutionName}
+                    onChange={(e) => setInstitutionName(e.target.value)}
+                    required
+                  >
+                    <option value="">— Select institution —</option>
+                    {verifiedInstitutions.map((u) => (
+                      <option key={u.id} value={u.name}>
+                        {u.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    id="vf_inst"
+                    placeholder="Institution name as on the credential"
+                    value={institutionName}
+                    onChange={(e) => setInstitutionName(e.target.value)}
+                    required
+                  />
+                )}
               </div>
+              {instListErr && (
+                <p className="verify-inst-list-hint muted-inline small" role="note">
+                  {instListErr} You can type the institution name exactly as printed on the certificate.
+                </p>
+              )}
             </div>
             <div className="inst-field">
               <label htmlFor="vf_student">Student name</label>
@@ -359,11 +428,30 @@ export function VerifyPage() {
               <span className="inst-input-icon" aria-hidden>
                 <CalendarDays/>
               </span>
-              <input id="vf_date" type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} required />
+              <input
+                id="vf_date"
+                type="text"
+                inputMode="text"
+                className="verify-mock-date-input mono"
+                placeholder="YYYY-MM-DD"
+                pattern="\d{4}-\d{2}-\d{2}"
+                title="Four-digit year, two-digit month, two-digit day (YYYY-MM-DD)"
+                maxLength={10}
+                autoComplete="off"
+                spellCheck={false}
+                value={issueDate}
+                onChange={(e) => setIssueDate(e.target.value)}
+                required
+              />
             </div>
-            <p className="verify-mock-date-hint muted-inline small">Submitting as: {issueDate || "—"}</p>
+            <p className="verify-mock-date-hint muted-inline small">Enter the date as shown: year-month-day with dashes.</p>
           </div>
-          <button type="submit" className="inst-submit-wide" disabled={fieldLoading} aria-busy={fieldLoading}>
+          <button
+            type="submit"
+            className="inst-submit-wide"
+            disabled={fieldLoading || instListLoading}
+            aria-busy={fieldLoading}
+          >
             <BusyLabel busy={fieldLoading} idle="Verify with fields" busyLabel="Verifying…" />
           </button>
         </form>

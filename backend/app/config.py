@@ -42,6 +42,11 @@ class Config:
     PINATA_JWT = os.environ.get("PINATA_JWT", "")
     PINATA_GATEWAY_BASE = os.environ.get("PINATA_GATEWAY_BASE", "https://gateway.pinata.cloud/ipfs")
 
+    # Absolute base (no trailing slash) for single-mint tokenURI: {base}/api/public/metadata/<token_id>
+    # PUBLIC_METADATA_BASE_URI is accepted as a typo-tolerant alias.
+    _pub_meta = (os.environ.get("PUBLIC_METADATA_BASE_URL") or os.environ.get("PUBLIC_METADATA_BASE_URI") or "").strip()
+    PUBLIC_METADATA_BASE_URL = _pub_meta.rstrip("/")
+
     # Metadata signature (Ed25519) settings.
     TRUCERT_SIG_KID = os.environ.get("TRUCERT_SIG_KID", "")
     TRUCERT_SIG_PRIVATE_KEY = os.environ.get("TRUCERT_SIG_PRIVATE_KEY", "")
@@ -57,3 +62,10 @@ class Config:
     # Optional Google Gemini (Developer API). Backend runs fine with these unset.
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
     GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+    # Verify /explain cache: keys are SHA-256 of canonical sanitized payload + model (safe long TTL).
+    GEMINI_VERIFY_EXPLAIN_CACHE_TTL_SECONDS = int(
+        os.environ.get("GEMINI_VERIFY_EXPLAIN_CACHE_TTL_SECONDS", str(24 * 3600))
+    )
+    GEMINI_VERIFY_EXPLAIN_CACHE_MAX_ENTRIES = int(os.environ.get("GEMINI_VERIFY_EXPLAIN_CACHE_MAX_ENTRIES", "500"))
+    # Risk hints AI summary: short TTL (rolling windows / DB change often).
+    GEMINI_RISK_SUMMARY_CACHE_TTL_SECONDS = int(os.environ.get("GEMINI_RISK_SUMMARY_CACHE_TTL_SECONDS", "180"))

@@ -26,7 +26,7 @@ from app.services import (
     notification_service,
     pinata_service,
 )
-from app.university_freeze import freeze_guard_response
+from app.university_freeze import freeze_guard_response, sync_uni_eip712_watermark
 
 BATCH_ROW_AI_MAX_QUESTION_CHARS = 500
 
@@ -757,7 +757,7 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             for r in pending
         ]
         commitment = eip712_service.batch_mint_commitment(batch_id, row_hashes)
-        nonce = int(uni.eip712_nonce or 0)
+        nonce = int(uni.eip712_batch_nonce or 0)
         expiry = eip712_service.default_expiry_unix()
         payload: list[dict[str, Any]] = []
         token_cursor = next_token_id_base
@@ -844,8 +844,16 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         if int(time.time()) > int(b.authorized_expiry_unix or 0):
             return jsonify({"error": "Batch authorization expired; call GET /eip712 again."}), 400
 
-        if int(uni.eip712_nonce or 0) != int(b.authorized_nonce_snapshot or -1):
-            return jsonify({"error": "Nonce mismatch; refresh EIP-712 payload from GET /eip712."}), 409
+        snap = b.authorized_nonce_snapshot
+        if snap is None:
+            return jsonify({"error": "Call GET /eip712 first to build batch authorization."}), 400
+        if int(uni.eip712_batch_nonce or 0) != int(snap):
+            return jsonify(
+                {
+                    "error": "Nonce mismatch; refresh EIP-712 payload from GET /eip712.",
+                    "error_code": "eip712_nonce_mismatch",
+                }
+            ), 409
 
         ch = (b.authorized_commitment_hex or "").strip()
         if ch.startswith("0x"):
@@ -855,7 +863,7 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             issuer_address=uni.wallet_address,
             batch_id=batch_id,
             commitment=commitment_bytes,
-            nonce=int(b.authorized_nonce_snapshot or 0),
+            nonce=int(snap),
             expiry_unix=int(b.authorized_expiry_unix or 0),
         )
         try:
@@ -884,7 +892,8 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         b.authorized_signature_hex = signature
         b.authorized_digest_hex = digest
         b.status = "authorized"
-        uni.eip712_nonce = int(uni.eip712_nonce or 0) + 1
+        uni.eip712_batch_nonce = int(uni.eip712_batch_nonce or 0) + 1
+        sync_uni_eip712_watermark(uni)
         b.updated_at = datetime.utcnow()
         db.session.commit()
 

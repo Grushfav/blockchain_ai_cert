@@ -83,6 +83,7 @@ Used by the pre-login **home** page so contract address, chain id, and Ed25519 v
 - `TRUCERT_SIG_KID`
 - `TRUCERT_SIG_PRIVATE_KEY` (Ed25519 private key bytes, hex or base64)
 - `TRUCERT_SIG_PUBLIC_KEYS` (JSON map: `{"kid":"hex-or-base64-pubkey"}`)
+- `PUBLIC_METADATA_BASE_URL` — **required for single mint** in production. Absolute API base with **no** trailing slash (e.g. `https://api.example.com`). On-chain `tokenURI` is `{PUBLIC_METADATA_BASE_URL}/api/public/metadata/<token_id>`; JSON is served from the database (single-mint certificate metadata is not pinned to IPFS). **Alias:** `PUBLIC_METADATA_BASE_URI` (same value). **Local dev:** set e.g. `http://127.0.0.1:5000`, or open the portal at `localhost` / `127.0.0.1` and the backend infers the base from the request when unset; for a public hostname set this explicitly.
 - `TRUCERT_MINTER_PRIVATE_KEY` — **platform** EVM key allowed by `TruCert.minter`; submits `mintForIssuer` (fund with Amoy MATIC for gas). Prefer KMS / HSM in production; env var is fine for the capstone.
 - `EIP712_DOMAIN_NAME` (default `TruCert`), `EIP712_DOMAIN_VERSION` (default `1`), `EIP712_CHAIN_ID` (default `80002`)
 - Optional `EIP712_VERIFYING_CONTRACT` — defaults to `TRUCERT_CONTRACT_ADDRESS` for the typed-data domain
@@ -91,6 +92,9 @@ Used by the pre-login **home** page so contract address, chain id, and Ed25519 v
 
 - `GEMINI_API_KEY` — **never commit**. If unset or empty, admin AI test returns **503** with `Gemini not configured`; the rest of the API runs normally.
 - `GEMINI_MODEL` — default `gemini-1.5-flash` (override if you use another Gemini model id).
+- `GEMINI_VERIFY_EXPLAIN_CACHE_TTL_SECONDS` — default **86400** (24h). `POST /api/verify/explain` caches Gemini text in-process keyed by **SHA-256 of canonical sanitized verification JSON + model name** (same inputs → same key; model change invalidates). Not HTTP `Cache-Control`.
+- `GEMINI_VERIFY_EXPLAIN_CACHE_MAX_ENTRIES` — default **500** (in-process eviction when exceeded).
+- `GEMINI_RISK_SUMMARY_CACHE_TTL_SECONDS` — default **180**. Short TTL for optional risk-hints AI (`include_ai_summary`), since aggregates change with live data.
 
 **Privacy:** Third-party LLMs process whatever text you send. Do **not** paste private keys, student or staff email addresses, government IDs, or other sensitive PII into prompts unless you have an explicit policy covering Google’s processing. TruCert does **not** send student or certificate payloads to Gemini automatically; only `POST /api/admin/ai/gemini-test` forwards the `prompt` JSON field you provide.
 

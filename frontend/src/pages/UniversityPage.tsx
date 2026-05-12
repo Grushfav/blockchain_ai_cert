@@ -5,7 +5,7 @@ import { BrandedLoader } from "../components/BrandedLoader";
 import { BusyLabel } from "../components/LoadingSpinner";
 import type { Eip1193Provider } from "ethers";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { API_BASE, apiFormData, apiJson, getStoredToken } from "../api/client";
+import { API_BASE, ApiHttpError, apiFormData, apiJson, getStoredToken } from "../api/client";
 import { TRUCERT_ABI } from "../abi/trucertAbi";
 import {
   InstitutionBottomNav,
@@ -13,6 +13,11 @@ import {
   type InstitutionNavKey,
 } from "../components/InstitutionBottomNav";
 import { institutionLogoDisplayUrl } from "../utils/institutionLogo";
+import {
+  getInjectedProvider,
+  INJECTED_WALLET_SYNC_EVENT,
+  readIssuerReadyAddress,
+} from "../utils/browserWallet";
 import { TablePagination } from "../components/TablePagination";
 import { usePagination } from "../hooks/usePagination";
 import {
@@ -189,6 +194,8 @@ export function UniversityPage() {
   const [logoMsg, setLogoMsg] = useState<string | null>(null);
 
   const [studentName, setStudentName] = useState("");
+  const [studentInternalId, setStudentInternalId] = useState("");
+  const [studentEmail, setStudentEmail] = useState("");
   const [degreeType, setDegreeType] = useState("");
   const [certId, setCertId] = useState("");
   const [issueDate, setIssueDate] = useState("");
@@ -311,6 +318,37 @@ export function UniversityPage() {
     void loadMe();
   }, [loadMe]);
 
+  const syncIssuerWalletFromInjected = useCallback(async () => {
+    if (!me || me.status !== "verified") {
+      setWalletAddress(null);
+      return;
+    }
+    const addr = await readIssuerReadyAddress(me);
+    setWalletAddress(addr);
+  }, [me]);
+
+  useEffect(() => {
+    void syncIssuerWalletFromInjected();
+  }, [syncIssuerWalletFromInjected]);
+
+  useEffect(() => {
+    const eth = getInjectedProvider();
+    if (!eth?.on || !eth.removeListener) return;
+    const bump = () => void syncIssuerWalletFromInjected();
+    eth.on("accountsChanged", bump);
+    eth.on("chainChanged", bump);
+    return () => {
+      eth.removeListener!("accountsChanged", bump);
+      eth.removeListener!("chainChanged", bump);
+    };
+  }, [syncIssuerWalletFromInjected]);
+
+  useEffect(() => {
+    const bump = () => void syncIssuerWalletFromInjected();
+    window.addEventListener(INJECTED_WALLET_SYNC_EVENT, bump);
+    return () => window.removeEventListener(INJECTED_WALLET_SYNC_EVENT, bump);
+  }, [syncIssuerWalletFromInjected]);
+
   useEffect(() => {
     const m = modeFromSearch(searchParams.get("mode"));
     setModeState(m ?? "mint");
@@ -432,6 +470,14 @@ export function UniversityPage() {
         "Gas estimation failed (no revert data from the RPC). Common causes: issuer wallet has no Amoy POL for gas; " +
         "connected wallet is not the current NFT owner; or the token is already locked. Fund POL from an Amoy faucet, " +
         "confirm token ownership on Polygonscan, then retry."
+      );
+    }
+    if (hay.includes("nonce mismatch")) {
+      return (
+        "Your EIP-712 signing nonce did not match what the server expected — usually because the authorization " +
+        "payload was stale, or (on older servers) a single mint and a batch sign shared one counter. Click " +
+        "“Sign batch authorization” or “Generate credential” again with a fresh payload. Use the wallet that " +
+        "matches your registered issuer address."
       );
     }
     return raw;
@@ -798,20 +844,40 @@ export function UniversityPage() {
     }
     setBatchSignBusy(true);
     try {
-      const data = await apiJson<{
-        eip712: NonNullable<PreparedMint["eip712"]>;
-        error?: string;
-      }>(`/api/university/mint-batches/${activeBatchId}/eip712`);
-      const { provider } = await getSignerContract();
-      const signer = await provider.getSigner();
-      const sig = await signEip712Envelope(signer, data.eip712);
-      await apiJson<{ message: string }>(
-        `/api/university/mint-batches/${activeBatchId}/submit-authorization`,
-        { method: "POST", json: { signature: sig } }
-      );
-      setBatchMsg("Batch authorization signed. Run “Execute batch mints” to submit on-chain mints (gas paid by platform minter).");
-      await refreshBatchMeta();
-      await loadMe();
+      const maxRounds = 2;
+      for (let round = 0; round < maxRounds; round += 1) {
+        if (round > 0) {
+          setBatchMsg(
+            "Signing nonce changed — another authorization may have completed. Loaded a fresh batch payload; approve the wallet prompt again."
+          );
+        }
+        const data = await apiJson<{
+          eip712: NonNullable<PreparedMint["eip712"]>;
+          error?: string;
+        }>(`/api/university/mint-batches/${activeBatchId}/eip712`);
+        const { provider } = await getSignerContract();
+        const signer = await provider.getSigner();
+        const sig = await signEip712Envelope(signer, data.eip712);
+        try {
+          await apiJson<{ message: string }>(
+            `/api/university/mint-batches/${activeBatchId}/submit-authorization`,
+            { method: "POST", json: { signature: sig } }
+          );
+          setBatchMsg(
+            "Batch authorization signed. Run “Execute batch mints” to submit on-chain mints (gas paid by platform minter)."
+          );
+          await refreshBatchMeta();
+          await loadMe();
+          return;
+        } catch (submitErr: unknown) {
+          const retry =
+            round < maxRounds - 1 &&
+            submitErr instanceof ApiHttpError &&
+            submitErr.errorCode === "eip712_nonce_mismatch";
+          if (retry) continue;
+          throw submitErr;
+        }
+      }
     } catch (caught: unknown) {
       setBatchMintErr(friendlyWalletError(caught));
     } finally {
@@ -937,42 +1003,63 @@ export function UniversityPage() {
     setMintMsg(null);
     if (
       !window.confirm(
-        `Mint credential on-chain?\n\nStudent: ${studentName}\nCert ID: ${certId}\n\nYou will sign an EIP-712 authorization in your wallet, then the platform minter submits the mint.`
+        `Mint credential on-chain?\n\nStudent: ${studentName}\nCert ID: ${certId}\nInternal ID: ${studentInternalId}\nEmail: ${studentEmail}\n\nYou will sign an EIP-712 authorization in your wallet, then the platform minter submits the mint.`
       )
     ) {
       return;
     }
     setMintBusy(true);
     try {
-      const prepared = await apiJson<PreparedMint>("/api/university/certificates/prepare-mint", {
-        method: "POST",
-        json: {
-          student_name: studentName,
-          degree_type: degreeType,
-          cert_id: certId,
-          issue_date: issueDate,
-        },
-      });
-      if (!prepared.eip712 || !prepared.mint_request_id) {
-        throw new Error("Server did not return EIP-712 authorization data.");
+      const mintBody = {
+        student_name: studentName,
+        student_internal_id: studentInternalId,
+        student_email: studentEmail,
+        degree_type: degreeType,
+        cert_id: certId,
+        issue_date: issueDate,
+      };
+      const maxRounds = 2;
+      for (let round = 0; round < maxRounds; round += 1) {
+        if (round > 0) {
+          setMintMsg(
+            "Signing nonce changed — preparing a fresh mint authorization. Approve the next wallet prompt(s) again."
+          );
+        }
+        const prepared = await apiJson<PreparedMint>("/api/university/certificates/prepare-mint", {
+          method: "POST",
+          json: mintBody,
+        });
+        if (!prepared.eip712 || !prepared.mint_request_id) {
+          throw new Error("Server did not return EIP-712 authorization data.");
+        }
+        const { provider } = await getSignerContract();
+        const signer = await provider.getSigner();
+        const sig = await signEip712Envelope(signer, prepared.eip712);
+        try {
+          const out = await apiJson<{
+            token_id: number;
+            tx_hash: string;
+            timing?: { prepare_to_complete_ms: number | null; platform_mint_ms: number };
+          }>("/api/university/certificates/submit-authorization", {
+            method: "POST",
+            json: { mint_request_id: prepared.mint_request_id, signature: sig },
+          });
+          const t = out.timing;
+          const timingNote =
+            t && (t.prepare_to_complete_ms != null || t.platform_mint_ms != null)
+              ? ` Timing: ${formatDurationMs(t.prepare_to_complete_ms ?? undefined)} from prepare to done (includes wallet signing); platform mint + receipt: ${formatDurationMs(t.platform_mint_ms)}.`
+              : "";
+          setMintMsg(`Minted on-chain as token ${out.token_id}. Minter tx: ${out.tx_hash}.${timingNote}`);
+          break;
+        } catch (submitErr: unknown) {
+          const retry =
+            round < maxRounds - 1 &&
+            submitErr instanceof ApiHttpError &&
+            submitErr.errorCode === "eip712_nonce_mismatch";
+          if (retry) continue;
+          throw submitErr;
+        }
       }
-      const { provider } = await getSignerContract();
-      const signer = await provider.getSigner();
-      const sig = await signEip712Envelope(signer, prepared.eip712);
-      const out = await apiJson<{
-        token_id: number;
-        tx_hash: string;
-        timing?: { prepare_to_complete_ms: number | null; platform_mint_ms: number };
-      }>("/api/university/certificates/submit-authorization", {
-        method: "POST",
-        json: { mint_request_id: prepared.mint_request_id, signature: sig },
-      });
-      const t = out.timing;
-      const timingNote =
-        t && (t.prepare_to_complete_ms != null || t.platform_mint_ms != null)
-          ? ` Timing: ${formatDurationMs(t.prepare_to_complete_ms ?? undefined)} from prepare to done (includes wallet signing); platform mint + receipt: ${formatDurationMs(t.platform_mint_ms)}.`
-          : "";
-      setMintMsg(`Minted on-chain as token ${out.token_id}. Minter tx: ${out.tx_hash}.${timingNote}`);
     } catch (caught: unknown) {
       setMintErr(friendlyWalletError(caught));
     } finally {
@@ -1378,12 +1465,8 @@ export function UniversityPage() {
       <header>
         <h1>UNIVERSITY PORTAL</h1>
         <p>
-<<<<<<< HEAD
-          Mint, claim, revoke, burn, and reissue using your approved issuer wallet only. Connect
-          MetaMask (or any injected wallet) on Polygon Amoy.
-=======
-          Issue, revoke, burn, and reissue certificates using your approved issuer wallet. Connect MetaMask on Polygon Amoy. Your private keys are never shared with the platform.
->>>>>>> bee1acd74d44e2c6100a765e945a3c8c8fab2012
+          Mint, claim, revoke, burn, and reissue using your approved issuer wallet only. Connect MetaMask (or any
+          injected wallet) on Polygon Amoy. Your private keys are never shared with the platform.
         </p>
          <p className="uni-dashboard-link-row">
   <Link to="/university/overview">Institution Dashboard</Link>
@@ -1805,6 +1888,39 @@ export function UniversityPage() {
               </div>
             </div>
           </div>
+          <div className="inst-field">
+            <label htmlFor="student_internal_id">Student internal ID</label>
+            <div className="inst-input-wrap">
+              <span className="inst-input-icon" aria-hidden>
+                <Hash size={18} />
+              </span>
+              <input
+                id="student_internal_id"
+                value={studentInternalId}
+                onChange={(e) => setStudentInternalId(e.target.value)}
+                placeholder="Institution student ID"
+                maxLength={128}
+                required
+              />
+            </div>
+          </div>
+          <div className="inst-field">
+            <label htmlFor="student_email">Student email</label>
+            <div className="inst-input-wrap">
+              <span className="inst-input-icon" aria-hidden>
+                <Mail size={18} />
+              </span>
+              <input
+                id="student_email"
+                type="email"
+                value={studentEmail}
+                onChange={(e) => setStudentEmail(e.target.value)}
+                placeholder="student@school.edu"
+                required
+              />
+            </div>
+          </div>
+          
           <div className="inst-field">
             <label htmlFor="student_name">Student full name</label>
             <div className="inst-input-wrap">

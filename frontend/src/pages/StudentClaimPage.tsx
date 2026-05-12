@@ -17,12 +17,9 @@ type VerifiedUni = {
   name: string;
   internal_id: string;
   logo_url?: string | null;
-<<<<<<< HEAD
   wallet_address?: string | null;
   domain_email?: string | null;
   institution_contact_email?: string | null;
-=======
->>>>>>> bee1acd74d44e2c6100a765e945a3c8c8fab2012
 };
 
 export function StudentClaimPage() {

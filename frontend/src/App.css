@@ -1734,6 +1734,14 @@ td.actions button {
   margin: 0.4rem 0 0;
 }
 
+.verify-inst-list-hint {
+  margin: 0.4rem 0 0;
+}
+
+.verify-mock-date-input {
+  font-variant-numeric: tabular-nums;
+}
+
 .verify-mock-callout {
   margin-top: 1rem;
   padding: 0.9rem 1rem;
@@ -6853,7 +6861,7 @@ button.btn-secondary:disabled:has(.busy-label) .loading-spinner {
   word-break: break-word;
 }
 
-/* Mint volume charts (Recharts + heatmap; UTC) */
+/* Mint volume charts (Recharts + heatmap; UTC-5) */
 .mint-chart-wrap {
   width: 100%;
   min-height: 200px;

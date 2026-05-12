@@ -13,6 +13,7 @@ from flask import Blueprint, Response, abort, jsonify, request
 from flask_jwt_extended import get_jwt, jwt_required
 from sqlalchemy import func
 
+from app.analytics_timezone import DISPLAY_TZ_LABEL
 from app.config import Config
 from app.extensions import db
 from app.models import ActivityLog, CertificateRecord, MintBatch, MintBatchRow, University
@@ -84,7 +85,7 @@ def _admin_summary_body(uni_id: int | None) -> tuple[dict[str, Any] | None, int 
         },
         "issuance_volume": {
             "activity_log_action_issued": issuance,
-            "note": "Windows use UTC; week starts Monday 00:00 UTC.",
+            "note": "Windows use UTC-5 (America/Panama); week starts Monday 00:00 in that zone.",
         },
         "reissues": reissues,
         "eip712": {
@@ -296,7 +297,7 @@ def register_admin_analytics_routes(bp: Blueprint) -> None:
         d = request.args.get("days", type=int) or 30
         d = max(7, min(366, int(d)))
         rows = analytics_service.mints_by_institution_last_days(d)
-        return jsonify({"timezone": "UTC", "days": d, "rows": rows})
+        return jsonify({"timezone": DISPLAY_TZ_LABEL, "days": d, "rows": rows})
 
     @bp.get("/admin/analytics/institutions-overview")
     @jwt_required()
