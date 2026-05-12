@@ -1364,14 +1364,7 @@ export function UniversityPage() {
         <h1>University portal</h1>
         <p>
           Mint, claim, revoke, burn, and reissue using your approved issuer wallet only. Connect
-          MetaMask (or any injected wallet) on Polygon Amoy — private keys are never entered or sent
-          to this app.
-        </p>
-        <p className="muted-inline">
-          <Link to="/university/overview">University overview hub</Link>
-          {" · "}
-          <Link to="/university/analytics">Open institution dashboard</Link> for issuance stats, batch outcomes, and
-          recent activity.
+          MetaMask (or any injected wallet) on Polygon Amoy.
         </p>
       </header>
 
@@ -1738,7 +1731,7 @@ export function UniversityPage() {
             <span className="panel-busy-overlay__text">Authorizing / minting…</span>
           </div>
         )}
-        <h2 className="subhead">Mint certificate (escrow)</h2>
+        <h2 className="subhead">Mint certificate </h2>
         <ol className="uni-flow-steps" aria-label="Typical mint sequence">
           <li className="uni-flow-steps__item">
             <span>1</span> Enter certificate details
@@ -1750,11 +1743,11 @@ export function UniversityPage() {
             <span>3</span> Platform submits mint on-chain
           </li>
         </ol>
-        <p className="muted-inline">
+        {/* <p className="muted-inline">
           Backend pins Ed25519-signed metadata to IPFS, then you sign an <strong>EIP-712 authorization</strong> in
           MetaMask (no gas). TruCert&apos;s platform minter wallet submits <code>mintForIssuer</code>; the NFT is
           minted to your issuer address.
-        </p>
+        </p> */}
         <form className="stack" onSubmit={mint}>
           <div className="row two-col">
             <div className="inst-field">

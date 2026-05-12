@@ -3,7 +3,15 @@ import { Link } from "react-router-dom";
 import { apiJson } from "../api/client";
 import { BusyLabel } from "../components/LoadingSpinner";
 
-type VerifiedUni = { id: number; name: string; internal_id: string; logo_url?: string | null };
+type VerifiedUni = {
+  id: number;
+  name: string;
+  internal_id: string;
+  logo_url?: string | null;
+  wallet_address?: string | null;
+  domain_email?: string | null;
+  institution_contact_email?: string | null;
+};
 
 export function StudentClaimPage() {
   const [universities, setUniversities] = useState<VerifiedUni[]>([]);

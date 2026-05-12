@@ -2342,6 +2342,9 @@ def public_verified_universities():
                     "name": u.name,
                     "internal_id": u.internal_id,
                     "logo_url": _ipfs_uri_to_gateway(u.logo_uri) if u.logo_uri else None,
+                    "wallet_address": u.wallet_address,
+                    "domain_email": u.domain_email,
+                    "institution_contact_email": u.institution_contact_email,
                 }
                 for u in rows
             ]

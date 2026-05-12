@@ -15,14 +15,25 @@ import auditLogImg from "../images/audit_log.png";
 import type { PublicConfig } from "../types/publicConfig";
 
 type VerifiedUniversity = {
+  id?: number;
   name: string;
   internal_id: string;
   logo_url: string | null;
+  wallet_address?: string | null;
+  domain_email?: string | null;
+  institution_contact_email?: string | null;
 };
 
 const REPO_URL = (
   import.meta.env.VITE_REPO_URL as string | undefined
 )?.trim();
+
+function formatWalletShort(addr: string | null | undefined): string {
+  const a = addr?.trim();
+  if (!a) return "—";
+  if (a.length < 14) return a;
+  return `${a.slice(0, 6)}…${a.slice(-4)}`;
+}
 
 function homeRailItemClass(active: boolean): string {
   return `home-bottom-rail__item${active ? " active" : ""}`;
@@ -584,7 +595,7 @@ export function HomePage() {
                   />
                 )}
 
-                <div>
+                <div className="home-uni-body">
 
                   <div className="home-uni-name">
                     {u.name}
@@ -593,6 +604,46 @@ export function HomePage() {
                   <code className="home-uni-id">
                     {u.internal_id}
                   </code>
+
+                  <dl className="home-uni-meta">
+
+                    <div className="home-uni-meta-row">
+                      <dt>Wallet</dt>
+                      <dd>
+                        {u.wallet_address ? (
+                          <code
+                            className="home-uni-wallet"
+                            title={u.wallet_address}
+                          >
+                            {formatWalletShort(u.wallet_address)}
+                          </code>
+                        ) : (
+                          <span className="home-muted">—</span>
+                        )}
+                      </dd>
+                    </div>
+
+                    <div className="home-uni-meta-row">
+                      <dt>Email</dt>
+                      <dd>
+                        {u.institution_contact_email?.trim() ? (
+                          <a href={`mailto:${u.institution_contact_email.trim()}`}>
+                            {u.institution_contact_email.trim()}
+                          </a>
+                        ) : (
+                          <span className="home-muted">—</span>
+                        )}
+                      </dd>
+                    </div>
+
+                    <div className="home-uni-meta-row">
+                      <dt>Domain</dt>
+                      <dd className="home-uni-domain">
+                        {u.domain_email?.trim() || "—"}
+                      </dd>
+                    </div>
+
+                  </dl>
 
                 </div>
 
@@ -661,7 +712,7 @@ export function HomePage() {
 
       {/* BOTTOM NAV */}
 
-      <nav
+      {/* <nav
         className="home-bottom-rail"
         aria-label="Primary destinations"
       >
@@ -722,7 +773,7 @@ export function HomePage() {
 
         </Link>
 
-      </nav>
+      </nav> */}
 
     </div>
   );
