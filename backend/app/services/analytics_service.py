@@ -886,3 +886,92 @@ def platform_operations_digest_metrics(*, now: datetime | None = None) -> dict[s
             },
         },
     }
+
+
+_MAX_MS_SANE = 600_000  # 10 minutes — drop pathological samples
+
+
+def _ms_percentile_band(samples: list[int]) -> dict[str, Any]:
+    vals = sorted(int(x) for x in samples if x is not None and 0 < int(x) <= _MAX_MS_SANE)
+    n = len(vals)
+    if n == 0:
+        return {"n": 0, "p50_ms": None, "p90_ms": None}
+
+    def _pct(q: float) -> int:
+        if n == 1:
+            return int(vals[0])
+        pos = (n - 1) * q
+        lo_i = int(pos)
+        hi_i = min(lo_i + 1, n - 1)
+        frac = pos - lo_i
+        return int(round(vals[lo_i] + (vals[hi_i] - vals[lo_i]) * frac))
+
+    return {"n": n, "p50_ms": _pct(0.5), "p90_ms": _pct(0.9)}
+
+
+def global_mint_time_percentiles() -> dict[str, Any]:
+    """
+    Platform-wide mint timing bands (no PII; suitable for a public JSON endpoint).
+
+    Uses recent samples only. p50 / p90 describe typical vs heavier-tail waits on-platform;
+    wallet signing and RPC variance are not fully captured.
+    """
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    mar_rows = (
+        db.session.query(MintAuthorizationRequest.platform_mint_ms)
+        .filter(
+            MintAuthorizationRequest.status == "minted",
+            MintAuthorizationRequest.platform_mint_ms.isnot(None),
+        )
+        .order_by(
+            MintAuthorizationRequest.completed_at.desc().nullslast(),
+            MintAuthorizationRequest.id.desc(),
+        )
+        .limit(400)
+        .all()
+    )
+    mar_ms = [int(r[0]) for r in mar_rows]
+
+    mbr_rows = (
+        db.session.query(MintBatchRow.platform_mint_ms)
+        .filter(MintBatchRow.platform_mint_ms.isnot(None))
+        .order_by(MintBatchRow.minted_at.desc().nullslast(), MintBatchRow.id.desc())
+        .limit(600)
+        .all()
+    )
+    mbr_ms = [int(r[0]) for r in mbr_rows]
+
+    chunk_rows = (
+        db.session.query(MintBatch.last_execute_chunk_wall_ms)
+        .filter(MintBatch.last_execute_chunk_wall_ms.isnot(None))
+        .order_by(MintBatch.updated_at.desc().nullslast(), MintBatch.id.desc())
+        .limit(200)
+        .all()
+    )
+    chunk_ms = [int(r[0]) for r in chunk_rows]
+
+    return {
+        "computed_at_utc": now,
+        "default_execute_max_mints": 40,
+        "documentation": {
+            "single_mint_platform": (
+                "Milliseconds from authorization verify through mint receipt (minted rows only). "
+                "Does not include wallet signing time."
+            ),
+            "batch_row_platform": (
+                "Per-row server segment (often receipt-heavy). Batch execute runs many rows per HTTP POST; "
+                "see execute_chunk_wall for how long one execute click tends to take."
+            ),
+            "execute_chunk_wall": (
+                "Wall time for the last batch execute request (partial or full chunk). Chunk size varies "
+                "(UI default 40, server allows up to 80 mints per request)."
+            ),
+        },
+        "note": (
+            "This data was collected from recent mints on the platform."
+        ),
+        "single_mint_platform": _ms_percentile_band(mar_ms),
+        "batch_row_platform": _ms_percentile_band(mbr_ms),
+        "execute_chunk_wall": _ms_percentile_band(chunk_ms),
+    }

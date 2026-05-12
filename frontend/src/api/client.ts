@@ -46,6 +46,17 @@ export class ApiHttpError extends Error {
   }
 }
 
+/** Shown on HTTP 404 for `/api/...` — usually wrong origin, missing proxy, or an older API build. */
+export function apiPathNotFoundMessage(path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return (
+    `404 for ${p}. Nothing on this origin handled that URL. ` +
+    `Use npm run dev (Vite proxies /api → port 5000), npm run preview with the backend on :5000, ` +
+    `or set VITE_API_BASE at build time to your API. If you already run Flask here, restart it ` +
+    `so it picks up the latest routes.`
+  );
+}
+
 export async function apiJson<T>(path: string, options: ApiOptions = {}): Promise<T> {
   const { method = "GET", json, headers: hdrs } = options;
   const headers: Record<string, string> = { ...(hdrs as Record<string, string>) };
@@ -60,12 +71,8 @@ export async function apiJson<T>(path: string, options: ApiOptions = {}): Promis
   });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string; error_code?: string };
   if (!res.ok) {
-    if (res.status === 404) {
-      throw new Error(
-        "API returned 404 — the Flask backend is not reachable at this URL. " +
-          "Start it with `python run.py` in `backend/` (port 5000), use `npm run dev` for the frontend, " +
-          "or set VITE_API_BASE in `frontend/.env` to your API origin."
-      );
+    if (res.status === 404 && path.startsWith("/api")) {
+      throw new Error(apiPathNotFoundMessage(path));
     }
     const msg = data.error || res.statusText || "Request failed";
     throw new ApiHttpError(msg, res.status, data.error_code);

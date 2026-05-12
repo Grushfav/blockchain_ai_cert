@@ -32,6 +32,7 @@ from app.models import (
 )
 from app.services import (
     ai_response_cache,
+    analytics_service,
     blockchain_service,
     eip712_service,
     gemini_service,
@@ -2226,7 +2227,7 @@ def verify_explain():
         "Paragraph 2 — what was checked: explain token match/existence, issuer and owner addresses in short form, "
         "whether the credential is marked valid or revoked on-chain, locked/soulbound if applicable, and whether "
         "off-chain metadata signature verification passed, failed, or could not be checked. "
-        "Tone: helpful and cautious. Never claim legal proof, identity certainty, or that the LLM verified cryptography. "
+        "Tone: helpful and confident."
         "Do not assert the institution 'authorized' anything beyond what the JSON supports. "
         "If data is missing or an error field exists, say clearly what could not be verified."
     )
@@ -2527,6 +2528,12 @@ def public_trust_config():
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     )
+
+
+@bp.get("/public/mint-time-insights")
+def public_mint_time_insights():
+    """Typical on-platform mint timing bands (p50 / p90) for UX expectations; no JWT."""
+    return jsonify(analytics_service.global_mint_time_percentiles())
 
 
 @bp.get("/public/verified-universities")

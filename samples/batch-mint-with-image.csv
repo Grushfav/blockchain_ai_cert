@@ -1,3 +1,3 @@
 cert_id,student_internal_id,student_email,student_full_name,degree_title,issue_date,image_ipfs_uri
-batch-img-001,STU-2001,dana.demo@example.edu,Dana Lee,BSc Mathematics,2026-05-10,
-batch-img-002,STU-2002,eric.demo@example.edu,Eric Patel,MSc Physics,2026-05-10,ipfs://bafybeihehkjcmyzvdldixinxrr3k5jj37tolozwkh3q6bw2q24rzt2o2mi
+certimg-011,STU-3001,dana.demo@example.edu,Gavin Seaton,BSc Computer Science,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u
+certimg-012,STU-3002,eric.demo@example.edu,Gavin Seaton,MSc Physics,2026-05-10,ipfs://bafybeihe2nvud3isqqdd2gfz2vid4ftapv44egydr7e5faxgtfg2xqlc4u

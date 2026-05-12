@@ -3,6 +3,7 @@ import { BrowserProvider, Contract, isAddress, parseUnits, type Signer } from "e
 import { BatchMintProgressStepper } from "../components/BatchMintProgressStepper";
 import { BrandedLoader } from "../components/BrandedLoader";
 import { BusyLabel } from "../components/LoadingSpinner";
+import { MintTimeInsightCard, type MintTimeInsightsPayload } from "../components/MintTimeInsightCard";
 import type { Eip1193Provider } from "ethers";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { API_BASE, ApiHttpError, apiFormData, apiJson, getStoredToken } from "../api/client";
@@ -287,6 +288,9 @@ export function UniversityPage() {
   const [batchAiText, setBatchAiText] = useState<string | null>(null);
   const [batchAiModel, setBatchAiModel] = useState<string | null>(null);
 
+  const [mintTimeInsights, setMintTimeInsights] = useState<MintTimeInsightsPayload | null>(null);
+  const [mintTimeInsightsErr, setMintTimeInsightsErr] = useState<string | null>(null);
+
   const invalidPg = usePagination(invalidPreview, 10, `${activeBatchId ?? "none"}-invalid`);
   const queuePg = usePagination(queueRows, 10, `${activeBatchId ?? "none"}-queue`);
   const eventsPg = usePagination(events, 10);
@@ -317,6 +321,21 @@ export function UniversityPage() {
   useEffect(() => {
     void loadMe();
   }, [loadMe]);
+
+  const loadMintTimeInsights = useCallback(async () => {
+    setMintTimeInsightsErr(null);
+    try {
+      const data = await apiJson<MintTimeInsightsPayload>("/api/public/mint-time-insights");
+      setMintTimeInsights(data);
+    } catch (caught: unknown) {
+      setMintTimeInsights(null);
+      setMintTimeInsightsErr(caught instanceof Error ? caught.message : "Failed to load insights");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadMintTimeInsights();
+  }, [loadMintTimeInsights]);
 
   const syncIssuerWalletFromInjected = useCallback(async () => {
     if (!me || me.status !== "verified") {
@@ -1422,6 +1441,46 @@ export function UniversityPage() {
   const batchStepSigned = ["authorized", "executing", "completed"].includes(batchStatus);
   const batchStepExecuted = batchStatus === "completed";
 
+  const batchPreparedExecuteCount = useMemo(
+    () => queueRows.filter((r) => r.row_status === "prepared").length,
+    [queueRows]
+  );
+
+  const batchMintedOkCount = useMemo(
+    () => queueRows.filter((r) => ["mint_confirmed", "email_sent", "email_failed"].includes(r.row_status)).length,
+    [queueRows]
+  );
+
+  const batchValidMintsRemaining = useMemo(() => {
+    if (!batchSummary) return 0;
+    return Math.max(0, batchSummary.valid_rows - batchMintedOkCount);
+  }, [batchSummary, batchMintedOkCount]);
+
+  const batchExecuteForecastPhase = useMemo((): "projected" | "ready" | "minting" | null => {
+    if (!batchSummary || activeBatchId == null) return null;
+    if (batchSummary.status === "completed" || batchSummary.valid_rows <= 0) return null;
+    if (batchSummary.status === "authorized" || batchSummary.status === "executing") return "minting";
+    if (batchAllReadyForSigning) return "ready";
+    return "projected";
+  }, [batchSummary, activeBatchId, batchAllReadyForSigning]);
+
+  const batchExecuteForecastRows = useMemo(() => {
+    if (!batchSummary || activeBatchId == null || batchSummary.status === "completed") return 0;
+    if (batchSummary.status === "authorized" || batchSummary.status === "executing") {
+      return batchPreparedExecuteCount;
+    }
+    if (batchAllReadyForSigning) {
+      return batchPreparedExecuteCount;
+    }
+    return batchValidMintsRemaining;
+  }, [
+    batchSummary,
+    activeBatchId,
+    batchPreparedExecuteCount,
+    batchAllReadyForSigning,
+    batchValidMintsRemaining,
+  ]);
+
   const batchWorkspaceHasContent =
     activeBatchId != null ||
     batchFile != null ||
@@ -1850,11 +1909,12 @@ export function UniversityPage() {
             <span>3</span> Platform submits mint on-chain
           </li>
         </ol>
-        {/* <p className="muted-inline">
-          Backend pins Ed25519-signed metadata to IPFS, then you sign an <strong>EIP-712 authorization</strong> in
-          MetaMask (no gas). TruCert&apos;s platform minter wallet submits <code>mintForIssuer</code>; the NFT is
-          minted to your issuer address.
-        </p> */}
+        <MintTimeInsightCard
+          insights={mintTimeInsights}
+          loadError={mintTimeInsightsErr}
+          variant="single"
+          onRetry={() => void loadMintTimeInsights()}
+        />
         <form className="stack" onSubmit={mint}>
           <div className="row two-col">
             <div className="inst-field">
@@ -1995,6 +2055,14 @@ export function UniversityPage() {
             <span>3</span> Sign batch EIP-712 &amp; execute mints on-chain
           </li>
         </ol>
+        <MintTimeInsightCard
+          insights={mintTimeInsights}
+          loadError={mintTimeInsightsErr}
+          variant="batch"
+          executeForecastRows={batchExecuteForecastRows}
+          executeForecastPhase={batchExecuteForecastPhase}
+          onRetry={() => void loadMintTimeInsights()}
+        />
         <div className="stack" style={{ marginTop: "0.65rem" }}>
           <div className="inst-field">
             <label htmlFor="batch_csv">Student list (CSV)</label>
