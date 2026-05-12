@@ -42,7 +42,7 @@ export function LoginPage() {
     <main className="auth-page">
       <section className="auth-card">
         <div className="auth-header">
-          <h1>LOGIN</h1>
+          <h1>PORTAL LOGIN</h1>
           <p>Sign in as a platform admin or verified university issuer.</p>
         </div>
 
