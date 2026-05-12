@@ -1,15 +1,27 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import {
+  GraduationCap,
+  Files,
+  Workflow,
+  Inbox,
+  Wallet,
+  Settings,
+} from "lucide-react";
 
 export type InstitutionNavKey = "mint" | "batch" | "actions" | "request" | "wallet" | "settings";
 
-const ITEMS: { key: InstitutionNavKey; icon: string; label: string }[] = [
-  { key: "mint", icon: "⛏", label: "Mint" },
-  { key: "batch", icon: "☁", label: "Batch" },
-  { key: "actions", icon: "⚡", label: "Actions" },
-  { key: "request", icon: "📩", label: "Request" },
-  { key: "wallet", icon: "👛", label: "Wallet" },
-  { key: "settings", icon: "⚙", label: "Settings" },
+const ITEMS: {
+  key: InstitutionNavKey;
+  icon: ReactNode;
+  label: string;
+}[] = [
+  { key: "mint", icon: <GraduationCap />, label: "Issue" },
+  { key: "batch", icon: <Files/>, label: "Batch" },
+  { key: "actions", icon: <Workflow />, label: "Actions" },
+  { key: "request", icon: <Inbox/>, label: "Request" },
+  { key: "wallet", icon: <Wallet/>, label: "Wallet" },
+  { key: "settings", icon: <Settings/>, label: "Settings" },
 ];
 
 export function institutionPortalHref(k: InstitutionNavKey): string {
@@ -58,4 +70,4 @@ export function InstitutionBottomNav({
       {rightSlot ? <div className="inst-bottom-nav__right">{rightSlot}</div> : null}
     </nav>
   );
-}
+} 

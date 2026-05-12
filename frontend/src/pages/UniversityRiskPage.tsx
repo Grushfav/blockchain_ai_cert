@@ -4,6 +4,14 @@ import { useAuth } from "../AuthContext";
 import { apiJson } from "../api/client";
 import { BusyLabel } from "../components/LoadingSpinner";
 import { InstitutionBottomNav, institutionPortalHref } from "../components/InstitutionBottomNav";
+import {
+  ShieldAlert,
+  TriangleAlert,
+  Info,
+  Sparkles,
+  ChevronDown,
+  RefreshCw,
+} from "lucide-react";
 
 type RiskHintsPayload = {
   computed_at: string;
@@ -84,7 +92,7 @@ export function UniversityRiskPage() {
     <div className="inst-portal risk-page">
       <header className="risk-page__hero">
         <p className="risk-page__eyebrow">Institution · Security</p>
-        <h1 className="risk-page__title">Audit &amp; risk monitoring</h1>
+        <h1 className="risk-page__title">Audit &amp; risk monitoring <ShieldAlert size={22} /></h1>
         <p className="risk-page__lead">Real-time security telemetry and cryptographic integrity reports.</p>
       </header>
 
@@ -92,7 +100,7 @@ export function UniversityRiskPage() {
         <div className="risk-page__section-head">
           <div>
             <h2 id="risk-hints-heading" className="risk-page__section-title">
-              Risk hints (phase D)
+              Risk hints <RefreshCw size={16} />
             </h2>
             <p className="risk-page__section-sub muted-inline small">Operational signals only — not proof of credential validity.</p>
           </div>
@@ -118,21 +126,23 @@ export function UniversityRiskPage() {
               aria-expanded={expanded}
             >
               <span className="risk-page__summary-bar-icon" aria-hidden>
-                ⚠
+                <TriangleAlert size={18} />
               </span>
               <span className="risk-page__summary-bar-text">
                 {n === 0 ? "No flags triggered" : `${n} flag${n === 1 ? "" : "s"} triggered`}
                 <span className="risk-page__summary-bar-sep">|</span>
                 Highest severity: <strong>{formatHighest(hi)}</strong>
               </span>
-              <span className={`risk-page__chevron${expanded ? " risk-page__chevron--open" : ""}`} aria-hidden />
+              <ChevronDown
+                className={`risk-page__chevron${expanded ? " risk-page__chevron--open" : ""}`}
+                />
             </button>
 
             {expanded && (
               <div className="risk-page__detail stack">
                 <div className="risk-page__info-banner" role="note">
                   <span className="risk-page__info-icon" aria-hidden>
-                    i
+                    <Info size={16} />
                   </span>
                   <p>
                     Operational only; validity = on-chain + signed metadata. These hints assist in fraud detection but do not
@@ -163,7 +173,7 @@ export function UniversityRiskPage() {
                   <div className="risk-ai-card">
                     <div className="risk-ai-card__head">
                       <span className="risk-ai-card__sparkle" aria-hidden>
-                        ✦
+                        <Sparkles size={16} />
                       </span>
                       <h3 className="risk-ai-card__title">AI summary (optional)</h3>
                     </div>

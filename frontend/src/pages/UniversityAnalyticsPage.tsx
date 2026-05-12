@@ -5,6 +5,11 @@ import { TablePagination } from "../components/TablePagination";
 import { usePagination } from "../hooks/usePagination";
 import { MintHeatmapGrid, MintTimeseriesLineChart } from "../components/MintAnalyticsCharts";
 import { institutionLogoDisplayUrl } from "../utils/institutionLogo";
+import {
+  Gauge,
+  ClipboardList,
+  Files,
+} from "lucide-react";
 
 function formatDurationMs(ms: number | null | undefined): string {
   if (ms == null || ms < 0 || Number.isNaN(ms)) return "—";
@@ -269,9 +274,9 @@ export function UniversityAnalyticsPage() {
   return (
     <>
       <header>
-        <h1>Institution dashboard</h1>
+        <h1>Institution Dashboard</h1>
         <p className="muted-inline">
-          Read-only issuance and batch metrics for your institution. Counts follow the activity index — use{" "}
+          Track credential activity, uploads, and verification performance for your institution.
           <strong>Sync and refresh</strong> in the portal (Audit → Activity log) if numbers look behind chain events.
         </p>
         <p className="muted-inline small">
@@ -286,7 +291,7 @@ export function UniversityAnalyticsPage() {
               void loadBatches(batchOffset);
             }}
           >
-            Reload figures
+            Refresh Dashboard
           </button>
         </p>
       </header>
@@ -342,7 +347,7 @@ export function UniversityAnalyticsPage() {
           <>
             <section className="panel inst-dashboard-panel">
               <div className="inst-card-head">
-                <h2 className="inst-card-title">Credential lifecycle</h2>
+                <h2 className="inst-card-title">Credential Lifecycle</h2>
               </div>
               <div className="stat-cards">
               <div className="stat-card">
@@ -358,7 +363,7 @@ export function UniversityAnalyticsPage() {
                 <span className="stat-value">{summary.lifecycle.issued_unclaimed}</span>
               </div>
               <div className="stat-card">
-                <span className="stat-label">Claim rate</span>
+                <span className="stat-label">Claim Rate</span>
                 <span className="stat-value">{(summary.lifecycle.claim_rate * 100).toFixed(1)}%</span>
               </div>
               <div className="stat-card">
@@ -374,7 +379,7 @@ export function UniversityAnalyticsPage() {
                 <span className="stat-value">{summary.lifecycle.reissued_tokens}</span>
               </div>
               <div className="stat-card">
-                <span className="stat-label">Prepared (pending mint)</span>
+                <span className="stat-label">Prepared (pending issue)</span>
                 <span className="stat-value">{summary.lifecycle.prepared}</span>
               </div>
             </div>
@@ -382,7 +387,7 @@ export function UniversityAnalyticsPage() {
 
           <section className="panel inst-dashboard-panel">
             <div className="inst-card-head">
-              <h2 className="inst-card-title">Issuance volume (indexed mint events)</h2>
+              <h2 className="inst-card-title">Issuance Volume (indexed issue events)</h2>
             </div>
             <p className="muted-inline small">{summary.issuance_volume.note}</p>
             <div className="stat-cards">
@@ -404,7 +409,7 @@ export function UniversityAnalyticsPage() {
           <section className="panel inst-dashboard-panel" aria-labelledby="inst-mint-chart-heading">
             <div className="inst-card-head" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: "0.5rem" }}>
               <h2 id="inst-mint-chart-heading" className="inst-card-title">
-                Mints per day (UTC)
+                Issues per day (UTC)
               </h2>
               <div className="admin-ops-digest__tabs" role="tablist" aria-label="Mint chart window">
                 <button
@@ -473,7 +478,7 @@ export function UniversityAnalyticsPage() {
               </div>
             </div>
             <p className="muted-inline small" style={{ marginTop: 0 }}>
-              Weekday × hour of day for indexed mints. Rows Mon→Sun; columns hour UTC (0–23).
+              Weekday × hour of day for indexed isuues. Rows Mon→Sun; columns hour UTC (0–23).
             </p>
             {heatErr && <div className="error">{heatErr}</div>}
             {heatLoading && !heatErr && <p className="muted-inline">Loading heatmap…</p>}
@@ -499,7 +504,7 @@ export function UniversityAnalyticsPage() {
 
             <section className="panel inst-dashboard-panel">
               <div className="inst-card-head">
-                <h2 className="inst-card-title">EIP-712 mint authorization</h2>
+                <h2 className="inst-card-title">Issue authorization</h2>
               </div>
               <div className="stat-cards">
                 <div className="stat-card">
@@ -542,17 +547,15 @@ export function UniversityAnalyticsPage() {
           {summary.mint_timing && (
             <section className="panel inst-dashboard-panel">
               <div className="inst-card-head">
-                <h2 className="inst-card-title">Mint timing (recorded)</h2>
+                <h2 className="inst-card-title">Recorded Issue Timing</h2>
               </div>
-              <p className="muted-inline small">{summary.mint_timing.note}</p>
+              <p className="muted-inline small">
+                Based on recent platform activity and credential processing.
+              </p>
               <div className="stat-cards">
                 <div className="stat-card">
                   <span className="stat-label">Avg mint time (platform)</span>
-                  <span className="stat-value">
-                    {summary.mint_timing.pooled_avg_platform_mint_ms != null
-                      ? formatDurationMs(summary.mint_timing.pooled_avg_platform_mint_ms)
-                      : "—"}
-                  </span>
+                    <span className="stat-value"> {summary.mint_timing.pooled_avg_platform_mint_ms != null ? formatDurationMs(summary.mint_timing.pooled_avg_platform_mint_ms) : "—"} </span>
                   <span className="muted-inline small" style={{ display: "block", marginTop: "0.25rem" }}>
                     {summary.mint_timing.pooled_sample_count} sample
                     {summary.mint_timing.pooled_sample_count === 1 ? "" : "s"} (single + batch rows)
@@ -866,7 +869,7 @@ export function UniversityAnalyticsPage() {
           }}
         >
           <span className="inst-dashboard-bottom-nav__icon" aria-hidden>
-            📊
+            <Gauge />
           </span>
           <span className="inst-dashboard-bottom-nav__label">Metrics</span>
         </button>
@@ -883,7 +886,7 @@ export function UniversityAnalyticsPage() {
           }}
         >
           <span className="inst-dashboard-bottom-nav__icon" aria-hidden>
-            📋
+            <ClipboardList />
           </span>
           <span className="inst-dashboard-bottom-nav__label">Recent activity</span>
         </button>
@@ -895,9 +898,9 @@ export function UniversityAnalyticsPage() {
           onClick={() => setDashTab("batches")}
         >
           <span className="inst-dashboard-bottom-nav__icon" aria-hidden>
-            📑
+            <Files />
           </span>
-          <span className="inst-dashboard-bottom-nav__label">CSV batch jobs</span>
+          <span className="inst-dashboard-bottom-nav__label">Batch Jobs</span>
         </button>
       </nav>
     </>

@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 
 import { API_BASE } from "../api/client";
+
 import batchIssuanceImg from "../images/batch_issuance.png";
 import lifecycleControlsImg from "../images/lifecycle_controls.png";
 import auditLogImg from "../images/audit_log.png";
@@ -44,6 +45,7 @@ export function HomePage() {
 
   const [cfg, setCfg] = useState<PublicConfig | null>(null);
   const [cfgErr, setCfgErr] = useState<string | null>(null);
+
   const [universities, setUniversities] = useState<
     VerifiedUniversity[]
   >([]);
@@ -101,6 +103,7 @@ export function HomePage() {
   }, []);
 
   const chainLabel = cfg?.network_name ?? "Polygon Amoy";
+
   const path = location.pathname;
   const hash = location.hash;
 
@@ -116,8 +119,9 @@ export function HomePage() {
 
       <section
         className="home-mock-hero-card"
-        aria-label="Verifiers"
+        aria-label="Hero"
       >
+
         <div className="home-mock-hero-top">
 
           <span className="home-mock-eyebrow">
@@ -137,9 +141,10 @@ export function HomePage() {
 
         <p className="home-mock-hero-lead">
           Securely issue and verify academic
-          credentials using blockchain technology.
-          Prevent fraud, reduce manual verification,
-          and give employers instant trust.
+          credentials using blockchain-backed
+          technology. Reduce fraud, simplify
+          verification, and build trust between
+          institutions, students, and employers.
         </p>
 
         <p className="muted-inline small" style={{ marginTop: "0.5rem" }}>
@@ -152,33 +157,16 @@ export function HomePage() {
         >
           Verify Credentials →
         </Link>
+
       </section>
-
-      {/* INSTITUTION CARD */}
-
-      <div className="home-mock-role-grid home-mock-role-grid--single">
-
-        <Link
-          to="/register"
-          className="home-mock-role-card"
-        >
-          <span className="home-mock-role-title">
-            Institutions
-          </span>
-
-          <span className="home-mock-role-action home-mock-role-action--accent">
-            Onboard →
-          </span>
-        </Link>
-
-      </div>
 
       {/* TRUST CHIPS */}
 
       <section
         className="home-trust-logos"
-        aria-label="Stack"
+        aria-label="Trust indicators"
       >
+
         <span className="home-trust-chip">
           Trusted Verification
         </span>
@@ -194,54 +182,66 @@ export function HomePage() {
         <span className="home-trust-chip">
           Secure Academic Credentials
         </span>
+
       </section>
 
+      {/* WHAT WE OFFER */}
+
       <section>
-  <h2 className="home-section-title">
-    What We Offer
-  </h2>
 
-  <ul className="home-bullets">
+        <h2 className="home-section-title">
+          What We Offer
+        </h2>
 
-    <li>
-      Instantly verify academic credentials through
-      a secure public verification portal.
-    </li>
+        <ul className="home-bullets">
 
-    <li>
-      Allow institutions to securely issue, manage,
-      revoke, and update digital certificates.
-    </li>
+          <li>
+            Instantly verify academic credentials
+            through a secure public verification
+            portal.
+          </li>
 
-    <li>
-      Give employers and organizations real time
-      access to trusted credential validation.
-    </li>
+          <li>
+            Allow institutions to securely issue,
+            manage, revoke, and update digital
+            certificates.
+          </li>
 
-    <li>
-      Support large scale certificate issuance with
-      streamlined batch processing tools.
-    </li>
+          <li>
+            Give employers and organizations
+            real-time access to trusted
+            credential validation.
+          </li>
 
-    <li>
-      Protect certificate integrity using secure
-      blockchainb backed verification technology.
-    </li>
+          <li>
+            Support large-scale certificate
+            issuance with streamlined batch
+            processing tools.
+          </li>
 
-    <li>
-      Maintain transparent credential history and
-      audit records for institutions and administrators.
-    </li>
+          <li>
+            Protect certificate integrity using
+            secure blockchain-backed verification
+            technology.
+          </li>
 
-    </ul>
-    </section>
+          <li>
+            Maintain transparent credential
+            history and audit records for
+            institutions and administrators.
+          </li>
 
-      {/* SECURITY SECTION */}
+        </ul>
+
+      </section>
+
+      {/* SECURITY */}
 
       <section
         className="home-mock-security"
         aria-labelledby="credible-heading"
       >
+
         <p className="home-mock-section-eyebrow">
           Security Protocol
         </p>
@@ -269,9 +269,9 @@ export function HomePage() {
             </h3>
 
             <p className="home-mock-cred-text">
-              Every credential is securely stored and
-              validated against blockchain records to
-              ensure authenticity and prevent fraud.
+              Every credential is securely stored
+              and verified to ensure authenticity
+              and prevent fraud.
             </p>
 
           </div>
@@ -294,21 +294,22 @@ export function HomePage() {
             </h3>
 
             <p className="home-mock-cred-text">
-              Only verified institutions can issue
-              credentials, ensuring trust and
-              preventing unauthorized activity.
+              Only approved institutions can issue
+              credentials, helping maintain trust
+              and security across the platform.
             </p>
 
           </div>
 
         </div>
+
       </section>
 
       {/* VERIFICATION FLOW */}
 
       <section
         className="home-mock-split-flows"
-        aria-label="Verification and lifecycle"
+        aria-label="Verification process"
       >
 
         <div className="home-mock-flow-panel">
@@ -330,8 +331,8 @@ export function HomePage() {
                 </span>
 
                 <p className="home-mock-vtimeline__desc">
-                  Validate certificates against secure
-                  blockchain records.
+                  Validate certificates against
+                  secure verification records.
                 </p>
 
               </div>
@@ -349,8 +350,9 @@ export function HomePage() {
                 </span>
 
                 <p className="home-mock-vtimeline__desc">
-                  Securely fetch credential metadata
-                  and verification details.
+                  Securely access credential
+                  information and verification
+                  details.
                 </p>
 
               </div>
@@ -389,6 +391,7 @@ export function HomePage() {
           <ol className="home-mock-lifecycle">
 
             <li className="home-mock-lifecycle__item">
+
               <span className="home-mock-lifecycle__num">
                 1
               </span>
@@ -400,14 +403,16 @@ export function HomePage() {
                 </span>
 
                 <p className="home-mock-lifecycle__desc">
-                  Institutions securely register and
-                  verify their identity.
+                  Institutions securely register
+                  and verify their identity.
                 </p>
 
               </div>
+
             </li>
 
             <li className="home-mock-lifecycle__item">
+
               <span className="home-mock-lifecycle__num">
                 2
               </span>
@@ -419,14 +424,16 @@ export function HomePage() {
                 </span>
 
                 <p className="home-mock-lifecycle__desc">
-                  Trusted administrators validate the
-                  institution.
+                  Trusted administrators validate
+                  the institution.
                 </p>
 
               </div>
+
             </li>
 
             <li className="home-mock-lifecycle__item">
+
               <span className="home-mock-lifecycle__num">
                 3
               </span>
@@ -438,14 +445,16 @@ export function HomePage() {
                 </span>
 
                 <p className="home-mock-lifecycle__desc">
-                  Credentials are securely generated
-                  and issued.
+                  Credentials are securely created
+                  and issued to students.
                 </p>
 
               </div>
+
             </li>
 
             <li className="home-mock-lifecycle__item">
+
               <span className="home-mock-lifecycle__num">
                 4
               </span>
@@ -457,11 +466,12 @@ export function HomePage() {
                 </span>
 
                 <p className="home-mock-lifecycle__desc">
-                  Employers and institutions can
+                  Employers and organizations can
                   instantly verify authenticity.
                 </p>
 
               </div>
+
             </li>
 
           </ol>
@@ -494,8 +504,8 @@ export function HomePage() {
             </h3>
 
             <p className="home-mock-spotlight__sub">
-              Efficiently issue multiple credentials
-              in a single workflow.
+              Efficiently issue multiple
+              credentials in a single workflow.
             </p>
 
           </div>
@@ -519,8 +529,8 @@ export function HomePage() {
             </h3>
 
             <p className="home-mock-spotlight__sub">
-              Revoke, update, and manage credentials
-              securely.
+              Revoke, update, and manage
+              credentials securely.
             </p>
 
           </div>
@@ -544,8 +554,8 @@ export function HomePage() {
             </h3>
 
             <p className="home-mock-spotlight__sub">
-              Maintain transparent and secure activity
-              tracking.
+              Maintain transparent and secure
+              activity tracking.
             </p>
 
           </div>
@@ -554,56 +564,138 @@ export function HomePage() {
 
       </section>
 
-      {/* VERIFIED UNIVERSITIES */}
+      {/* SECURITY & TRANSPARENCY */}
 
-      <section aria-labelledby="verified-heading">
+      <section
+        className="home-panel trust-panel home-trust-redesign"
+        id="trust-panel"
+        aria-labelledby="trust-heading"
+      >
 
         <h2
-          id="verified-heading"
-          className="home-section-title"
+          id="trust-heading"
+          className="home-trust-redesign__title"
         >
-          Verified Institutions
+          Security & Transparency
         </h2>
 
-        {universities.length === 0 ? (
+        <p className="home-trust-redesign__intro">
+          TruCert provides transparent
+          verification records so institutions,
+          employers, and students can confidently
+          trust issued credentials.
 
-          <p className="home-muted">
-            No verified institutions yet.
-          </p>
+          The information below helps confirm the
+          authenticity and integrity of
+          certificates issued through the
+          platform.
+        </p>
 
-        ) : (
+        {cfgErr && (
+          <div className="error home-trust-err">
+            {cfgErr}
+          </div>
+        )}
 
-          <ul className="home-uni-grid">
+        <div className="home-trust-grid">
 
-            {universities.map((u) => (
+          <div className="home-trust-kv-card">
 
-              <li
-                key={u.internal_id}
-                className="home-uni-card"
-              >
+            <div className="home-trust-kv-label">
+              Network
+            </div>
 
-                {u.logo_url ? (
-                  <img
-                    src={u.logo_url}
-                    alt=""
-                    className="home-uni-logo"
-                  />
-                ) : (
-                  <div
-                    className="home-uni-logo-ph"
-                    aria-hidden
-                  />
-                )}
+            <div className="home-trust-kv-value">
+              {chainLabel}
+            </div>
 
+<<<<<<< HEAD
                 <div className="home-uni-body">
+=======
+          </div>
 
-                  <div className="home-uni-name">
-                    {u.name}
+          <div className="home-trust-kv-card">
+
+            <div className="home-trust-kv-label">
+              Verification Contract
+            </div>
+
+            <div className="home-trust-kv-value">
+
+              {cfg?.contract_address ? (
+                <code className="home-trust-kv-mono">
+                  {cfg.contract_address}
+                </code>
+              ) : (
+                <span className="home-trust-kv-muted">
+                  Not configured
+                </span>
+              )}
+
+            </div>
+
+          </div>
+
+        </div>
+
+        <div className="home-trust-keys-block">
+
+          <h3 className="home-trust-keys-heading">
+
+            <KeyRound
+              className="home-trust-keys-icon"
+              aria-hidden
+            />
+
+            Platform Verification Keys
+
+          </h3>
+
+          {!cfg?.trucert_public_keys?.length ? (
+
+            <div className="home-trust-key-card home-trust-key-card--empty">
+
+              <p className="home-trust-key-empty-msg">
+                No verification keys published.
+              </p>
+
+            </div>
+
+          ) : (
+
+            <div className="home-trust-keys-list">
+
+              {cfg.trucert_public_keys.map((k) => (
+
+                <div
+                  key={k.kid}
+                  className="home-trust-key-card"
+                >
+
+                  <div className="home-trust-key-row">
+
+                    <span className="home-trust-key-field-label">
+                      Verification Key
+                    </span>
+
+                    <code className="home-trust-key-field-value home-trust-key-field-value--break">
+                      {k.public_key_base64}
+                    </code>
+>>>>>>> bee1acd74d44e2c6100a765e945a3c8c8fab2012
+
                   </div>
 
-                  <code className="home-uni-id">
-                    {u.internal_id}
-                  </code>
+                  <div className="home-trust-key-row">
+
+                    <span className="home-trust-key-field-label">
+                      Key Reference
+                    </span>
+
+                    <code className="home-trust-key-field-value">
+                      {k.kid}
+                    </code>
+
+                  </div>
 
                   <dl className="home-uni-meta">
 
@@ -647,13 +739,262 @@ export function HomePage() {
 
                 </div>
 
-              </li>
+              ))}
 
-            ))}
+            </div>
 
-          </ul>
+          )}
 
-        )}
+        </div>
+
+      </section>
+
+{/* REGISTER INSTITUTION */}
+
+<section className="home-register-section">
+
+  <div className="home-register-card">
+
+    <h2 className="home-section-title">
+      Register Institution
+    </h2>
+
+    <p className="home-register-text">
+      Join trusted institutions using TruCert
+      to securely issue and verify academic
+      credentials.
+    </p>
+
+    <Link
+      to="/register"
+      className="btn btn-primary"
+    >
+      Register Institution
+    </Link>
+
+  </div>
+
+</section>
+
+{/* VERIFIED INSTITUTIONS */}
+
+<section aria-labelledby="verified-heading">
+
+  <h2
+    id="verified-heading"
+    className="home-section-title"
+  >
+    Verified Institutions
+  </h2>
+
+  {universities.length === 0 ? (
+
+    <p className="home-muted">
+      No verified institutions yet.
+    </p>
+
+  ) : (
+
+    <ul className="home-uni-grid">
+
+      {universities.map((u) => (
+
+        <li
+          key={u.internal_id}
+          className="home-uni-card"
+        >
+
+          {u.logo_url ? (
+
+            <img
+              src={u.logo_url}
+              alt=""
+              className="home-uni-logo"
+            />
+
+          ) : (
+
+            <div
+              className="home-uni-logo-ph"
+              aria-hidden
+            />
+
+          )}
+
+          <div>
+
+            <div className="home-uni-name-wrap">
+
+              <span className="home-uni-name">
+                {u.name}
+              </span>
+
+              <span className="home-verified-badge">
+                Verified Institution
+              </span>
+
+            </div>
+
+            <code className="home-uni-id">
+              {u.internal_id}
+            </code>
+
+          </div>
+
+        </li>
+
+      ))}
+
+    </ul>
+
+  )}
+
+</section>
+
+      {/* GLOSSARY */}
+
+      <section className="home-panel">
+
+        <h2 className="home-section-title">
+          Credential Status Guide
+        </h2>
+
+        <table className="home-table">
+
+          <thead>
+
+            <tr>
+              <th>Status</th>
+              <th>Meaning</th>
+            </tr>
+
+          </thead>
+
+          <tbody>
+
+            <tr>
+
+              <td>Valid</td>
+
+              <td>
+                The credential is active and
+                verified.
+              </td>
+
+            </tr>
+
+            <tr>
+
+              <td>Revoked</td>
+
+              <td>
+                The credential has been cancelled
+                by the issuing institution.
+              </td>
+
+            </tr>
+
+            <tr>
+
+              <td>Locked</td>
+
+              <td>
+                The credential is securely tied to
+                its owner and cannot be
+                transferred.
+              </td>
+
+            </tr>
+
+          </tbody>
+
+        </table>
+
+      </section>
+
+      {/* FAQ */}
+
+      <section className="home-mock-faq-wrap">
+
+        <h2 className="home-mock-protocol-faq-title">
+          Frequently Asked Questions
+        </h2>
+
+        <div className="home-faq home-faq--protocol">
+
+          <details>
+
+            <summary>
+              Why is TruCert secure?
+            </summary>
+
+            <p>
+              TruCert uses secure verification
+              technology to help protect academic
+              credentials from fraud or
+              unauthorized changes.
+            </p>
+
+          </details>
+
+          <details>
+
+            <summary>
+              Why is my certificate taking time
+              to load?
+            </summary>
+
+            <p>
+              Verification records may sometimes
+              take a few moments to fully load
+              depending on network activity.
+            </p>
+
+          </details>
+
+          <details>
+
+            <summary>
+              What happens if a credential is
+              revoked?
+            </summary>
+
+            <p>
+              The issuing institution has marked
+              the credential as no longer valid.
+            </p>
+
+          </details>
+
+          <details>
+
+            <summary>
+              Who can issue credentials?
+            </summary>
+
+            <p>
+              Only approved and verified
+              institutions can issue credentials
+              through TruCert.
+            </p>
+
+          </details>
+
+          <details>
+
+            <summary>
+              Can employers verify certificates?
+            </summary>
+
+            <p>
+              Yes. Employers can instantly verify
+              credentials through the public
+              verification portal.
+            </p>
+
+          </details>
+
+        </div>
 
       </section>
 
@@ -724,9 +1065,7 @@ export function HomePage() {
           }
         >
 
-          <Shield
-            className="home-bottom-rail__icon"
-          />
+          <Shield className="home-bottom-rail__icon" />
 
           <span className="home-bottom-rail__label">
             Verify
@@ -745,12 +1084,10 @@ export function HomePage() {
           }
         >
 
-          <Building
-            className="home-bottom-rail__icon"
-          />
+          <Building className="home-bottom-rail__icon" />
 
           <span className="home-bottom-rail__label">
-            Issuer
+            Institutions
           </span>
 
         </NavLink>
@@ -763,9 +1100,7 @@ export function HomePage() {
           )}
         >
 
-          <KeyRound
-            className="home-bottom-rail__icon"
-          />
+          <KeyRound className="home-bottom-rail__icon" />
 
           <span className="home-bottom-rail__label">
             Security

@@ -6,6 +6,21 @@ import { BusyLabel } from "../components/LoadingSpinner";
 import { MintMiniBars } from "../components/MintAnalyticsCharts";
 import { InstitutionBottomNav, institutionPortalHref } from "../components/InstitutionBottomNav";
 import { institutionLogoDisplayUrl } from "../utils/institutionLogo";
+import {
+  BarChart3,
+  ShieldAlert,
+  Files,
+  Wallet,
+  Clock3,
+  Bell,
+  Funnel,
+  Activity,
+  TriangleAlert,
+  ClipboardX,
+  MailWarning,
+  Link2,
+  Copy,
+} from "lucide-react";
 
 type Me = {
   name: string;
@@ -269,7 +284,7 @@ export function UniversityHubPage() {
           <div className="uni-hub__panel-head">
             <h2 id="hub-metrics" className="uni-hub__panel-title">
               <span className="uni-hub__panel-icon" aria-hidden>
-                ▤
+                <BarChart3 />
               </span>
               Issuance metrics
             </h2>
@@ -329,7 +344,7 @@ export function UniversityHubPage() {
           <div className="uni-hub__panel-head uni-hub__panel-head--split">
             <h2 id="hub-risk" className="uni-hub__panel-title">
               <span className="uni-hub__panel-icon" aria-hidden>
-                🛡
+                <ShieldAlert />
               </span>
               Risk snapshot
             </h2>
@@ -376,7 +391,7 @@ export function UniversityHubPage() {
           <div className="uni-hub__panel-head">
             <h2 id="hub-batch" className="uni-hub__panel-title">
               <span className="uni-hub__panel-icon" aria-hidden>
-                ⧉
+                <Files />
               </span>
               Latest batch
             </h2>
@@ -413,7 +428,7 @@ export function UniversityHubPage() {
           <div className="uni-hub__panel-head">
             <h2 id="hub-wallet" className="uni-hub__panel-title">
               <span className="uni-hub__panel-icon" aria-hidden>
-                👛
+                <Wallet />
               </span>
               Wallet &amp; chain
             </h2>
@@ -438,7 +453,7 @@ export function UniversityHubPage() {
               <div className="uni-hub__wallet-field">
                 <span className="uni-hub__wallet-label">Chain</span>
                 <span className="uni-hub__wallet-value">
-                  <span aria-hidden>🔗</span> {chainDisplayName(me.chain_id)}
+                  <span aria-hidden><Link2 size={16} /></span> {chainDisplayName(me.chain_id)}
                 </span>
               </div>
             </div>
@@ -454,7 +469,7 @@ export function UniversityHubPage() {
           <div className="uni-hub__panel-head uni-hub__panel-head--split">
             <h2 id="hub-pending" className="uni-hub__panel-title">
               <span className="uni-hub__panel-icon" aria-hidden>
-                !
+                <TriangleAlert />
               </span>
               Pending actions
             </h2>
@@ -470,7 +485,7 @@ export function UniversityHubPage() {
                 }`}
               >
                 <span className="uni-hub__pending-icon" aria-hidden>
-                  ⚡
+                  <Clock3 />
                 </span>
                 <span className="uni-hub__pending-num">{pending.rows_awaiting_preparation}</span>
                 <span className="uni-hub__pending-label">Rows not prepared</span>
@@ -481,7 +496,7 @@ export function UniversityHubPage() {
                 }`}
               >
                 <span className="uni-hub__pending-icon" aria-hidden>
-                  ✎
+                  <ClipboardX />
                 </span>
                 <span className="uni-hub__pending-num">{pending.mint_failed_rows}</span>
                 <span className="uni-hub__pending-label">Mint failed (latest batch)</span>
@@ -492,10 +507,10 @@ export function UniversityHubPage() {
                 }`}
               >
                 <span className="uni-hub__pending-icon" aria-hidden>
-                  ✉
+                  <MailWarning />
                 </span>
                 <span className="uni-hub__pending-num">{pending.pending_single_mint_eip712}</span>
-                <span className="uni-hub__pending-label">Awaiting EIP-712 (single mint)</span>
+                <span className="uni-hub__pending-label">Awaiting approval</span>
               </div>
             </div>
           ) : (
@@ -510,7 +525,7 @@ export function UniversityHubPage() {
           <div className="uni-hub__panel-head">
             <h2 id="hub-notifs" className="uni-hub__panel-title">
               <span className="uni-hub__panel-icon" aria-hidden>
-                🔔
+                <Bell />
               </span>
               Recent notifications
             </h2>
@@ -544,7 +559,7 @@ export function UniversityHubPage() {
           <div className="uni-hub__panel-head uni-hub__panel-head--split">
             <h2 id="hub-funnel" className="uni-hub__panel-title">
               <span className="uni-hub__panel-icon" aria-hidden>
-                ◎
+                <Funnel />
               </span>
               Claim funnel
             </h2>
@@ -583,7 +598,7 @@ export function UniversityHubPage() {
           <div className="uni-hub__panel-head">
             <h2 id="hub-tx" className="uni-hub__panel-title">
               <span className="uni-hub__panel-icon" aria-hidden>
-                ⧗
+                <Activity />
               </span>
               Latest on-chain activity
             </h2>
@@ -592,7 +607,7 @@ export function UniversityHubPage() {
             <div className="uni-hub__tx-strip">
               <div className="uni-hub__tx-strip__left">
                 <span className="uni-hub__tx-strip__icon" aria-hidden>
-                  ⧉
+                  <Link2 />
                 </span>
                 <div>
                   <p className="uni-hub__tx-strip__title">
@@ -607,7 +622,7 @@ export function UniversityHubPage() {
                   title="Copy full tx hash"
                   onClick={() => void copyTxHash(latestTx.tx_hash!)}
                 >
-                  ⎘
+                  <Copy size={16} />
                 </button>
               </div>
               <div className="uni-hub__tx-strip__right">
