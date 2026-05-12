@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
   Shield,
   KeyRound,
   Eye,
-  Building,
 } from "lucide-react";
 
 import { API_BASE } from "../api/client";
@@ -36,13 +35,7 @@ function formatWalletShort(addr: string | null | undefined): string {
   return `${a.slice(0, 6)}…${a.slice(-4)}`;
 }
 
-function homeRailItemClass(active: boolean): string {
-  return `home-bottom-rail__item${active ? " active" : ""}`;
-}
-
 export function HomePage() {
-  const location = useLocation();
-
   const [cfg, setCfg] = useState<PublicConfig | null>(null);
   const [cfgErr, setCfgErr] = useState<string | null>(null);
 
@@ -103,9 +96,7 @@ export function HomePage() {
   }, []);
 
   const chainLabel = cfg?.network_name ?? "Polygon Amoy";
-
-  const path = location.pathname;
-  const hash = location.hash;
+  const chainId = cfg?.chain_id ?? 80002;
 
   return (
     <div className="home-page home-page--mock">
@@ -606,145 +597,107 @@ export function HomePage() {
             </div>
 
             <div className="home-trust-kv-value">
-              {chainLabel}
+              {chainLabel}{" "}
+              <span className="home-trust-kv-muted">(chainId {chainId})</span>
             </div>
-
-<<<<<<< HEAD
-                <div className="home-uni-body">
-=======
           </div>
 
           <div className="home-trust-kv-card">
-
-            <div className="home-trust-kv-label">
-              Verification Contract
-            </div>
-
+            <div className="home-trust-kv-label">TruCert contract</div>
             <div className="home-trust-kv-value">
-
               {cfg?.contract_address ? (
-                <code className="home-trust-kv-mono">
-                  {cfg.contract_address}
-                </code>
+                <code className="home-trust-kv-mono">{cfg.contract_address}</code>
               ) : (
-                <span className="home-trust-kv-muted">
-                  Not configured
-                </span>
+                <span className="home-trust-kv-muted">Not configured</span>
               )}
-
+              {cfg?.contract_explorer_url ? (
+                <>
+                  {" "}
+                  <a
+                    href={cfg.contract_explorer_url}
+                    className="home-trust-explorer-link"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View on explorer
+                    <span className="home-trust-external-icon" aria-hidden>
+                      ↗
+                    </span>
+                  </a>
+                </>
+              ) : (
+                <span className="home-trust-kv-muted home-trust-explorer-fallback">—</span>
+              )}
             </div>
-
           </div>
 
+          <div className="home-trust-kv-card">
+            <div className="home-trust-kv-label">IPFS gateway (read)</div>
+            <div className="home-trust-kv-value">
+              <code className="home-trust-kv-mono">{cfg?.pinata_gateway_base || "—"}</code>
+            </div>
+          </div>
+
+          <div className="home-trust-kv-card">
+            <div className="home-trust-kv-label">Active signing key id</div>
+            <div className="home-trust-kv-value">
+              {cfg?.active_signing_kid ? (
+                <code className="home-trust-kv-mono">{cfg.active_signing_kid}</code>
+              ) : (
+                <span className="home-trust-kv-muted">—</span>
+              )}
+            </div>
+          </div>
         </div>
 
+        {cfg ? (
+          <p className="home-trust-snapshot muted small">
+            Config snapshot: {cfg.updated_at}
+          </p>
+        ) : null}
+
         <div className="home-trust-keys-block">
-
           <h3 className="home-trust-keys-heading">
-
-            <KeyRound
-              className="home-trust-keys-icon"
-              aria-hidden
-            />
-
-            Platform Verification Keys
-
+            <KeyRound className="home-trust-keys-icon" aria-hidden />
+            Ed25519 public keys
           </h3>
 
           {!cfg?.trucert_public_keys?.length ? (
-
             <div className="home-trust-key-card home-trust-key-card--empty">
-
-              <p className="home-trust-key-empty-msg">
-                No verification keys published.
-              </p>
-
+              <p className="home-trust-key-empty-msg">None published (optional signing)</p>
             </div>
-
           ) : (
-
             <div className="home-trust-keys-list">
-
               {cfg.trucert_public_keys.map((k) => (
-
-                <div
-                  key={k.kid}
-                  className="home-trust-key-card"
-                >
-
+                <div key={k.kid} className="home-trust-key-card">
                   <div className="home-trust-key-row">
-
-                    <span className="home-trust-key-field-label">
-                      Verification Key
-                    </span>
-
-                    <code className="home-trust-key-field-value home-trust-key-field-value--break">
-                      {k.public_key_base64}
-                    </code>
->>>>>>> bee1acd74d44e2c6100a765e945a3c8c8fab2012
-
+                    <span className="home-trust-key-field-label">KID</span>
+                    <code className="home-trust-key-field-value">{k.kid}</code>
                   </div>
-
                   <div className="home-trust-key-row">
-
-                    <span className="home-trust-key-field-label">
-                      Key Reference
-                    </span>
-
-                    <code className="home-trust-key-field-value">
-                      {k.kid}
-                    </code>
-
+                    <span className="home-trust-key-field-label">Public key (base64)</span>
+                    {k.public_key_base64 ? (
+                      <code className="home-trust-key-field-value home-trust-key-field-value--break">
+                        {k.public_key_base64}
+                      </code>
+                    ) : (
+                      <span className="home-trust-kv-muted">Invalid key material in env</span>
+                    )}
                   </div>
-
-                  <dl className="home-uni-meta">
-
-                    <div className="home-uni-meta-row">
-                      <dt>Wallet</dt>
-                      <dd>
-                        {u.wallet_address ? (
-                          <code
-                            className="home-uni-wallet"
-                            title={u.wallet_address}
-                          >
-                            {formatWalletShort(u.wallet_address)}
-                          </code>
-                        ) : (
-                          <span className="home-muted">—</span>
-                        )}
-                      </dd>
-                    </div>
-
-                    <div className="home-uni-meta-row">
-                      <dt>Email</dt>
-                      <dd>
-                        {u.institution_contact_email?.trim() ? (
-                          <a href={`mailto:${u.institution_contact_email.trim()}`}>
-                            {u.institution_contact_email.trim()}
-                          </a>
-                        ) : (
-                          <span className="home-muted">—</span>
-                        )}
-                      </dd>
-                    </div>
-
-                    <div className="home-uni-meta-row">
-                      <dt>Domain</dt>
-                      <dd className="home-uni-domain">
-                        {u.domain_email?.trim() || "—"}
-                      </dd>
-                    </div>
-
-                  </dl>
-
+                  <div className="home-trust-key-row">
+                    <span className="home-trust-key-field-label">Raw hex</span>
+                    {k.public_key_hex ? (
+                      <code className="home-trust-key-field-value home-trust-key-field-value--break">
+                        {k.public_key_hex.startsWith("0x") ? k.public_key_hex : `0x${k.public_key_hex}`}
+                      </code>
+                    ) : (
+                      <span className="home-trust-kv-muted">—</span>
+                    )}
+                  </div>
                 </div>
-
               ))}
-
             </div>
-
           )}
-
         </div>
 
       </section>
@@ -821,7 +774,7 @@ export function HomePage() {
 
           )}
 
-          <div>
+          <div className="home-uni-body">
 
             <div className="home-uni-name-wrap">
 
@@ -838,6 +791,41 @@ export function HomePage() {
             <code className="home-uni-id">
               {u.internal_id}
             </code>
+
+            <dl className="home-uni-meta">
+
+              <div className="home-uni-meta-row">
+                <dt>Wallet</dt>
+                <dd>
+                  {u.wallet_address ? (
+                    <code className="home-uni-wallet" title={u.wallet_address}>
+                      {formatWalletShort(u.wallet_address)}
+                    </code>
+                  ) : (
+                    <span className="home-muted">—</span>
+                  )}
+                </dd>
+              </div>
+
+              <div className="home-uni-meta-row">
+                <dt>Email</dt>
+                <dd>
+                  {u.institution_contact_email?.trim() ? (
+                    <a href={`mailto:${u.institution_contact_email.trim()}`}>
+                      {u.institution_contact_email.trim()}
+                    </a>
+                  ) : (
+                    <span className="home-muted">—</span>
+                  )}
+                </dd>
+              </div>
+
+              <div className="home-uni-meta-row">
+                <dt>Domain</dt>
+                <dd className="home-uni-domain">{u.domain_email?.trim() || "—"}</dd>
+              </div>
+
+            </dl>
 
           </div>
 
@@ -1050,65 +1038,6 @@ export function HomePage() {
         </p>
 
       </footer>
-
-      {/* BOTTOM NAV */}
-
-      {/* <nav
-        className="home-bottom-rail"
-        aria-label="Primary destinations"
-      >
-
-        <NavLink
-          to="/verify"
-          className={({ isActive }) =>
-            homeRailItemClass(isActive)
-          }
-        >
-
-          <Shield className="home-bottom-rail__icon" />
-
-          <span className="home-bottom-rail__label">
-            Verify
-          </span>
-
-        </NavLink>
-
-        <NavLink
-          to="/login"
-          className={() =>
-            homeRailItemClass(
-              path.startsWith("/university") ||
-              path === "/login" ||
-              path === "/register"
-            )
-          }
-        >
-
-          <Building className="home-bottom-rail__icon" />
-
-          <span className="home-bottom-rail__label">
-            Institutions
-          </span>
-
-        </NavLink>
-
-        <Link
-          to="/#trust-panel"
-          className={homeRailItemClass(
-            path === "/" &&
-            hash === "#trust-panel"
-          )}
-        >
-
-          <KeyRound className="home-bottom-rail__icon" />
-
-          <span className="home-bottom-rail__label">
-            Security
-          </span>
-
-        </Link>
-
-      </nav> */}
 
     </div>
   );
