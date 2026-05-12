@@ -514,6 +514,118 @@ body {
   max-width: 920px;
 }
 
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 480px;
+  padding: 3.2rem;
+  border-radius: 28px;
+  position: relative;
+  overflow: hidden;
+
+  background: linear-gradient(
+    145deg,
+    rgba(8, 18, 48, 0.96),
+    rgba(4, 12, 35, 0.96)
+  );
+
+  border: 1px solid rgba(96, 165, 250, 0.14);
+  box-shadow:
+    0 0 45px rgba(37, 99, 235, 0.18),
+    0 25px 70px rgba(0, 0, 0, 0.45);
+}
+
+.auth-card::before {
+  content: "";
+  position: absolute;
+  top: -120px;
+  right: -120px;
+  width: 280px;
+  height: 280px;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.35), transparent 70%);
+}
+
+.auth-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.auth-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.auth-header h1 {
+  margin: 0 0 0.8rem;
+  font-size: 2.6rem;
+  font-weight: 800;
+  color: #fff;
+}
+
+.auth-header p {
+  margin: 0 auto;
+  max-width: 340px;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.5;
+}
+
+.auth-form {
+  width: 100%;
+  max-width: 380px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.form-group input {
+  width: 100%;
+  height: 54px;
+  padding: 0 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(96, 165, 250, 0.16);
+  background: rgba(15, 23, 42, 0.92);
+  color: white;
+  font-size: 1rem;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.16);
+}
+
+.auth-btn {
+  width: 100%;
+  height: 54px;
+  margin-top: 0.4rem;
+  border-radius: 14px;
+}
+
+.auth-footer {
+  margin: 1.8rem 0 0;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.auth-footer a {
+  color: #60a5fa;
+  font-weight: 700;
+}
+
 .shell--sidebar.layout-institution .app-sidebar-main__content {
   padding-bottom: 6rem;
 }
