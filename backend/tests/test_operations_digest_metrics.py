@@ -218,7 +218,7 @@ class OperationsDigestMetricsTests(unittest.TestCase):
         self.assertIn("email", (r.get_json() or {}).get("error", "").lower())
         self._cleanup_mint_fixtures()
 
-    def test_prepare_single_mint_no_pinata_public_metadata_verifies(self) -> None:
+    def test_prepare_single_mint_pins_ipfs_metadata(self) -> None:
         import json
 
         import app.config as app_config
@@ -229,10 +229,12 @@ class OperationsDigestMetricsTests(unittest.TestCase):
         _, user = self._seed_verified_university_single_mint()
 
         orig_pub = app_config.Config.PUBLIC_METADATA_BASE_URL
+        orig_jwt = app_config.Config.PINATA_JWT
         orig_kid = app_config.Config.TRUCERT_SIG_KID
         orig_priv = app_config.Config.TRUCERT_SIG_PRIVATE_KEY
         orig_pubkeys = app_config.Config.TRUCERT_SIG_PUBLIC_KEYS
-        app_config.Config.PUBLIC_METADATA_BASE_URL = "http://localhost"
+        app_config.Config.PUBLIC_METADATA_BASE_URL = ""
+        app_config.Config.PINATA_JWT = "test-jwt-placeholder"
         app_config.Config.TRUCERT_SIG_KID = "unit-test"
         app_config.Config.TRUCERT_SIG_PRIVATE_KEY = (
             "0x2ce2795dc16073228f97a72d58e7b2694422336912356849487544a36d8ed6eb"
@@ -241,7 +243,7 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             '{"unit-test": "0x72f2d39a93d51d639c441592b0c399394d7fdab70d6ac9011e54e24ec76fd4ee"}'
         )
 
-        mock_pin = MagicMock(side_effect=AssertionError("single mint must not pin certificate JSON"))
+        mock_pin = MagicMock(return_value="ipfs://QmTestSingleMintJson")
         mock_contract = MagicMock()
         mock_contract.functions.nextTokenId.return_value.call.return_value = 42
         try:
@@ -262,11 +264,13 @@ class OperationsDigestMetricsTests(unittest.TestCase):
                                 headers=self._uni_jwt_single_mint(user),
                             )
             self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
-            self.assertEqual(mock_pin.call_count, 0)
+            mock_pin.assert_called_once()
+            self.assertEqual(mock_pin.call_args[0][0], 42)
             data = r.get_json() or {}
-            self.assertTrue(str(data.get("metadata_uri", "")).startswith("http://localhost/api/public/metadata/42"))
+            self.assertEqual(data.get("metadata_uri"), "ipfs://QmTestSingleMintJson")
             mar = MintAuthorizationRequest.query.filter_by(cert_id="CERT-SM-99").first()
             self.assertIsNotNone(mar)
+            self.assertEqual(mar.metadata_uri, "ipfs://QmTestSingleMintJson")
             self.assertEqual(mar.student_internal_id, "IID-9")
             self.assertEqual(mar.student_email, "student@example.edu")
             self.assertTrue((mar.signed_metadata_json or "").strip())
@@ -278,6 +282,7 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             self.assertTrue(ok)
         finally:
             app_config.Config.PUBLIC_METADATA_BASE_URL = orig_pub
+            app_config.Config.PINATA_JWT = orig_jwt
             app_config.Config.TRUCERT_SIG_KID = orig_kid
             app_config.Config.TRUCERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUCERT_SIG_PUBLIC_KEYS = orig_pubkeys

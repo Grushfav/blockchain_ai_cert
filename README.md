@@ -83,7 +83,7 @@ Used by the pre-login **home** page so contract address, chain id, and Ed25519 v
 - `TRUCERT_SIG_KID`
 - `TRUCERT_SIG_PRIVATE_KEY` (Ed25519 private key bytes, hex or base64)
 - `TRUCERT_SIG_PUBLIC_KEYS` (JSON map: `{"kid":"hex-or-base64-pubkey"}`)
-- `PUBLIC_METADATA_BASE_URL` — **required for single mint** in production. Absolute API base with **no** trailing slash (e.g. `https://api.example.com`). On-chain `tokenURI` is `{PUBLIC_METADATA_BASE_URL}/api/public/metadata/<token_id>`; JSON is served from the database (single-mint certificate metadata is not pinned to IPFS). **Alias:** `PUBLIC_METADATA_BASE_URI` (same value). **Local dev:** set e.g. `http://127.0.0.1:5000`, or open the portal at `localhost` / `127.0.0.1` and the backend infers the base from the request when unset; for a public hostname set this explicitly.
+- `PUBLIC_METADATA_BASE_URL` — **optional** for new single mints. Single mint `tokenURI` is now **`ipfs://…`** (Pinata `pinJSONToIPFS`, same as batch). Keep this set if you need **`/api/public/metadata/<token_id>`** for **legacy** HTTPS tokenURIs or for `submit-authorization` to realign old pending requests. Absolute API base, **no** trailing slash (e.g. `https://api.example.com`). **Alias:** `PUBLIC_METADATA_BASE_URI`. **Local dev:** e.g. `http://127.0.0.1:5000`, or infer from request host on localhost when unset.
 - `TRUCERT_MINTER_PRIVATE_KEY` — **platform** EVM key allowed by `TruCert.minter`; submits `mintForIssuer` (fund with Amoy MATIC for gas). Prefer KMS / HSM in production; env var is fine for the capstone.
 - `EIP712_DOMAIN_NAME` (default `TruCert`), `EIP712_DOMAIN_VERSION` (default `1`), `EIP712_CHAIN_ID` (default `80002`)
 - Optional `EIP712_VERIFYING_CONTRACT` — defaults to `TRUCERT_CONTRACT_ADDRESS` for the typed-data domain
@@ -140,7 +140,7 @@ Invoke-RestMethod -Method Post -Uri "$base/admin/ai/gemini-test" -Headers $heade
 
 University JWT endpoints **prepare** Ed25519-signed IPFS metadata and build **EIP-712** typed data. The backend **never** holds issuer private keys; the **minter** key sends `mintForIssuer(issuer, uri, coreHash, certId)` after a valid authorization.
 
-- `POST /api/university/certificates/prepare-mint` — pin metadata; returns `mint_request_id`, `eip712`, `commitment`, `nonce`, `expiry_unix`
+- `POST /api/university/certificates/prepare-mint` — signs metadata, pins JSON to IPFS (`ipfs://` token URI); returns `metadata_uri`, `mint_request_id`, `eip712`, `commitment`, `nonce`, `expiry_unix`
 - `POST /api/university/certificates/submit-authorization` — body `{ mint_request_id, signature }`; verifies typed data + on-chain whitelist; minter mints; increments per-university `eip712_nonce` on success
 - `POST /api/university/certificates/prepare-reissue/<old_token_id>` — still prepares metadata for **issuer-signed** `revokeAndReissue` in the wallet
 - `GET /api/university/activity/basic` — simple activity derived from DB + current on-chain state (no large `eth_getLogs` scans)
@@ -180,7 +180,7 @@ Optional: `image_ipfs_uri` (must be `ipfs://` or `http(s)://`, max 512 chars).
 - `issue_date` must be `YYYY-MM-DD`.
 - `student_email` must look like a valid email.
 - `cert_id` must be unique in the file and must not already exist in `certificate_records`.
-- **Privacy:** `student_email` and `student_internal_id` are stored only on **`mint_batch_rows`** in the database. They are **not** included in pinned IPFS metadata (same pipeline as single mint: institution fields come from the university profile).
+- **Privacy:** `student_email` and `student_internal_id` are stored only on **`mint_batch_rows`** in the database. They are **not** included in pinned IPFS metadata (same as single mint: only public certificate fields in the JSON).
 
 **Batch API (university JWT):**
 

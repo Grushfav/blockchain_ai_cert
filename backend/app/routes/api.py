@@ -1030,6 +1030,7 @@ def _effective_public_metadata_base() -> str:
 
 
 def _public_single_mint_metadata_url(token_id: int) -> str:
+    """Legacy HTTPS tokenURI for older mint requests; new single mints use ``ipfs://`` from Pinata."""
     base = _effective_public_metadata_base()
     if not base:
         raise ValueError(
@@ -1096,15 +1097,13 @@ def prepare_mint_certificate():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
-    if not _effective_public_metadata_base():
+    if not (Config.PINATA_JWT or "").strip():
         return jsonify(
             {
                 "error": (
-                    "PUBLIC_METADATA_BASE_URL is not configured (alias: PUBLIC_METADATA_BASE_URI). "
-                    "Set it in backend/.env to your API’s public origin, no trailing slash "
-                    "(e.g. http://127.0.0.1:5000 for local). "
-                    "If you use the portal at http://127.0.0.1 or http://localhost, the backend can infer the base URL "
-                    "automatically; for production or other hosts you must set this variable."
+                    "PINATA_JWT is not configured. Single-mint metadata is pinned to IPFS (on-chain tokenURI is "
+                    "ipfs://…). Set PINATA_JWT in backend/.env (Pinata API JWT). "
+                    "PUBLIC_METADATA_BASE_URL is only needed for legacy HTTP tokenURIs."
                 )
             }
         ), 503
@@ -1118,7 +1117,9 @@ def prepare_mint_certificate():
             return jsonify({"error": cfg_err}), 503
         contract = blockchain_service.get_contract(w3)
         next_token_id = int(contract.functions.nextTokenId().call())
-        metadata_uri = _public_single_mint_metadata_url(next_token_id)
+        metadata_uri = pinata_service.pin_certificate_metadata(
+            next_token_id, signed_metadata, Config.PINATA_JWT
+        )
     except ValueError as e:
         return jsonify({"error": str(e)}), 503
     except Exception as e:
@@ -1300,16 +1301,19 @@ def submit_mint_authorization():
 
     mint_uri = (req.metadata_uri or "").strip()
     if (req.signed_metadata_json or "").strip():
-        try:
-            next_tid = int(contract.functions.nextTokenId().call())
-            mint_uri = _public_single_mint_metadata_url(next_tid)
-        except ValueError as e:
-            return jsonify({"error": str(e)}), 503
-        req.metadata_uri = mint_uri
-        for cr in CertificateRecord.query.filter_by(cert_id=req.cert_id, university_id=uni.id).all():
-            if (cr.status or "").lower() == "prepared":
-                cr.ipfs_uri = mint_uri
-        db.session.flush()
+        # Legacy mints used an HTTPS tokenURI tied to nextTokenId; realign before mint if another mint interleaved.
+        # IPFS tokenURIs are content-addressed and stay valid for this cert — keep as-is.
+        if mint_uri.startswith("http://") or mint_uri.startswith("https://"):
+            try:
+                next_tid = int(contract.functions.nextTokenId().call())
+                mint_uri = _public_single_mint_metadata_url(next_tid)
+            except ValueError as e:
+                return jsonify({"error": str(e)}), 503
+            req.metadata_uri = mint_uri
+            for cr in CertificateRecord.query.filter_by(cert_id=req.cert_id, university_id=uni.id).all():
+                if (cr.status or "").lower() == "prepared":
+                    cr.ipfs_uri = mint_uri
+            db.session.flush()
 
     chain_t0 = time.perf_counter()
     try:
@@ -2456,7 +2460,7 @@ def mark_notifications_read_all():
 
 @bp.get("/public/metadata/<int:token_id>")
 def public_certificate_metadata(token_id: int):
-    """Serve single-mint (HTTPS tokenURI) or proxy legacy ipfs:// metadata as JSON."""
+    """Serve DB-backed certificate JSON (HTTPS tokenURI legacy) or proxy ipfs:// metadata as JSON."""
     rec = CertificateRecord.query.filter_by(token_id=int(token_id)).first()
     if not rec:
         return jsonify({"error": "Not found"}), 404

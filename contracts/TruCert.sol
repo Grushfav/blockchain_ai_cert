@@ -8,7 +8,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 /**
  * @title TruCert
  * @notice Academic certificates as ERC-721 tokens with escrow (university-held) and soulbound (locked) states.
- * @dev Minimal on-chain facts: issuer, ownership, locked, validity, metadata URI. Details live off-chain (IPFS JSON).
+ * @dev Minimal on-chain facts: issuer, ownership, locked, validity, metadata URI. Details live off-chain (IPFS JSON or HTTPS URI).
  */
 contract TruCert is ERC721, ERC721URIStorage, Ownable {
     uint256 public nextTokenId = 1;
