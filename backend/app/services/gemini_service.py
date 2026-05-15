@@ -36,9 +36,18 @@ def generate_text(prompt: str, *, system_instruction: str | None = None) -> str:
     if not text_in:
         raise GeminiError("Prompt is empty")
 
-    # Lazy import so `import app` works if google-genai were ever optional (it is required in requirements.txt).
-    from google import genai
-    from google.genai import types
+    # Lazy import: requires PyPI package ``google-genai`` (``from google import genai``). A bare ``google`` or only
+    # ``google-generativeai`` (legacy) causes ImportError — do not let that bubble as HTTP 500 on risk-hints.
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError as e:
+        logger.warning("Google GenAI SDK import failed: %s", e)
+        raise GeminiError(
+            "Google GenAI SDK is missing or incompatible. In backend/: "
+            "`pip install google-genai` (prefer the project venv: `.venv\\Scripts\\activate` then install). "
+            f"Details: {e!s}"
+        ) from e
 
     api_key = Config.GEMINI_API_KEY.strip()
     model = (Config.GEMINI_MODEL or "gemini-1.5-flash").strip()

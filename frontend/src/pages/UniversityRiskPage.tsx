@@ -102,7 +102,7 @@ export function UniversityRiskPage() {
             <h2 id="risk-hints-heading" className="risk-page__section-title">
               Risk hints <RefreshCw size={16} />
             </h2>
-            <p className="risk-page__section-sub muted-inline small">Operational signals only — not proof of credential validity.</p>
+            <p className="risk-page__section-sub muted-inline small">Operational signals only.</p>
           </div>
           <div className="risk-page__actions">
             <button type="button" className="btn-secondary" onClick={() => void load()} disabled={busy} aria-busy={busy}>
@@ -145,8 +145,7 @@ export function UniversityRiskPage() {
                     <Info size={16} />
                   </span>
                   <p>
-                    Operational only; validity = on-chain + signed metadata. These hints assist in fraud detection but do not
-                    override cryptographic status.
+                    These hints assist in fraud detection but do not override cryptographic status.
                   </p>
                 </div>
 
