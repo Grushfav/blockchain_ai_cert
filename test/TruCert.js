@@ -37,6 +37,24 @@ describe("TruCert", function () {
     await expect(c.connect(student).transferFrom(student.address, other.address, 1n)).to.be.reverted;
   });
 
+  it("blocks generic transfers before claim so escrow cannot bypass soulbinding", async function () {
+    const { c, uni, student, platform } = await deploy();
+    await c
+      .connect(platform)
+      .mintForIssuer(uni.address, "ipfs://x", ethers.keccak256(ethers.toUtf8Bytes("core-escrow")), "CERT-E");
+
+    await expect(
+      c.connect(uni).transferFrom(uni.address, student.address, 1n)
+    ).to.be.revertedWithCustomError(c, "InvalidToken");
+
+    expect(await c.ownerOf(1n)).to.equal(uni.address);
+    expect(await c.locked(1n)).to.equal(false);
+
+    await c.connect(uni).claim(1n, student.address);
+    expect(await c.ownerOf(1n)).to.equal(student.address);
+    expect(await c.locked(1n)).to.equal(true);
+  });
+
   it("revokes and blocks transfers", async function () {
     const { c, uni, student, platform } = await deploy();
     await c

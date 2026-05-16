@@ -23,6 +23,9 @@ contract TruCert is ERC721, ERC721URIStorage, Ownable {
     /// @notice False after revokeCertificate — blocks transfers and marks credential invalid.
     mapping(uint256 tokenId => bool valid) public valid;
 
+    /// @dev Allows the dedicated claim path to perform the only escrow-phase transfer.
+    mapping(uint256 tokenId => bool claiming) private _claiming;
+
     /// @notice Only these addresses may mint (verified universities).
     mapping(address issuer => bool) public whitelistedIssuers;
 
@@ -100,7 +103,9 @@ contract TruCert is ERC721, ERC721URIStorage, Ownable {
         if (issuer == address(0)) revert InvalidToken();
         if (ownerOf(tokenId) != msg.sender) revert InvalidToken();
         if (locked[tokenId]) revert Soulbound();
+        _claiming[tokenId] = true;
         _transfer(msg.sender, student, tokenId);
+        _claiming[tokenId] = false;
         locked[tokenId] = true;
         emit CertificateClaimed(tokenId, msg.sender, student);
     }
@@ -164,6 +169,7 @@ contract TruCert is ERC721, ERC721URIStorage, Ownable {
         if (from != address(0) && to != address(0)) {
             if (!valid[tokenId]) revert InvalidToken();
             if (locked[tokenId]) revert Soulbound();
+            if (!_claiming[tokenId]) revert InvalidToken();
         }
         return super._update(to, tokenId, auth);
     }
