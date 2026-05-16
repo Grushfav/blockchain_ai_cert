@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ from web3.middleware import geth_poa_middleware
 from app.config import Config
 
 _last_good_rpc_url: str | None = None
+_TX_NONCE_LOCK = threading.Lock()
 
 
 def _project_root() -> Path:
@@ -82,32 +84,36 @@ def _build_and_send_raw_tx(
     fn_name: str,
     *args: Any,
 ) -> dict[str, Any]:
-    fn = getattr(contract.functions, fn_name)
-    base: dict[str, Any] = {
-        "from": account.address,
-        "nonce": w3.eth.get_transaction_count(account.address),
-        "chainId": w3.eth.chain_id,
-    }
-    latest = w3.eth.get_block("latest")
-    base_fee = latest.get("baseFeePerGas")
-    if base_fee is not None:
-        # Polygon Amoy enforces a high minimum tip (often ~25 gwei); 2 gwei fails.
-        min_tip = Web3.to_wei(30, "gwei")
-        try:
-            suggested = int(w3.eth.max_priority_fee)
-        except Exception:
-            suggested = 0
-        priority = max(suggested, min_tip)
-        base["maxPriorityFeePerGas"] = priority
-        base["maxFeePerGas"] = base_fee * 2 + priority
-    else:
-        base["gasPrice"] = w3.eth.gas_price
+    # The platform minter/owner hot wallets may serve concurrent HTTP requests.
+    # Reserve from the pending nonce while serializing local sends so two requests
+    # cannot sign different transactions with the same account nonce.
+    with _TX_NONCE_LOCK:
+        fn = getattr(contract.functions, fn_name)
+        base: dict[str, Any] = {
+            "from": account.address,
+            "nonce": w3.eth.get_transaction_count(account.address, "pending"),
+            "chainId": w3.eth.chain_id,
+        }
+        latest = w3.eth.get_block("latest")
+        base_fee = latest.get("baseFeePerGas")
+        if base_fee is not None:
+            # Polygon Amoy enforces a high minimum tip (often ~25 gwei); 2 gwei fails.
+            min_tip = Web3.to_wei(30, "gwei")
+            try:
+                suggested = int(w3.eth.max_priority_fee)
+            except Exception:
+                suggested = 0
+            priority = max(suggested, min_tip)
+            base["maxPriorityFeePerGas"] = priority
+            base["maxFeePerGas"] = base_fee * 2 + priority
+        else:
+            base["gasPrice"] = w3.eth.gas_price
 
-    built = fn(*args).build_transaction(base)
-    built.setdefault("gas", int(w3.eth.estimate_gas(built) * 1.2))
-    signed = account.sign_transaction(built)
-    raw = signed.raw_transaction if hasattr(signed, "raw_transaction") else signed.rawTransaction
-    tx_hash = w3.eth.send_raw_transaction(raw)
+        built = fn(*args).build_transaction(base)
+        built.setdefault("gas", int(w3.eth.estimate_gas(built) * 1.2))
+        signed = account.sign_transaction(built)
+        raw = signed.raw_transaction if hasattr(signed, "raw_transaction") else signed.rawTransaction
+        tx_hash = w3.eth.send_raw_transaction(raw)
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
     if receipt["status"] != 1:
         raise RuntimeError(f"Transaction failed: {tx_hash.hex()}")
