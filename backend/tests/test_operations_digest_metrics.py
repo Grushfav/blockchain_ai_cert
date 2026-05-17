@@ -7,7 +7,15 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    Notification,
+    StudentClaimRequest,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -152,6 +160,8 @@ class OperationsDigestMetricsTests(unittest.TestCase):
     # --- Single-mint HTTPS metadata (same app/db lifecycle as class; must run before tearDownClass drop_all) ---
 
     def _cleanup_mint_fixtures(self) -> None:
+        Notification.query.delete()
+        StudentClaimRequest.query.delete()
         MintAuthorizationRequest.query.delete()
         CertificateRecord.query.delete()
         User.query.filter(User.email == "singlemint@example.edu").delete(synchronize_session=False)
@@ -287,6 +297,70 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUCERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUCERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+    def test_public_student_claim_matches_single_mint_certificate_record(self) -> None:
+        import json
+
+        import app.student_claim_routes as claim_routes
+
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        db.session.add(
+            CertificateRecord(
+                token_id=777,
+                university_id=uni.id,
+                cert_id="CERT-SM-CLAIM",
+                ipfs_uri="ipfs://QmSingleMintClaim",
+                core_hash="0x" + "b" * 64,
+                status="issued",
+                signed_metadata_json=json.dumps(
+                    {
+                        "student_full_name": "Single Claim Student",
+                        "degree_title": "BSc Claims",
+                        "cert_id": "CERT-SM-CLAIM",
+                    }
+                ),
+                student_internal_id="IID-claim",
+                student_email="student@example.edu",
+            )
+        )
+        db.session.commit()
+
+        with patch.object(
+            claim_routes.blockchain_service,
+            "escrow_claim_eligibility",
+            return_value=(True, None),
+        ) as mock_eligibility:
+            r = self.client.post(
+                "/api/public/student-claim-requests",
+                json={
+                    "university_id": uni.id,
+                    "student_internal_id": "IID-claim",
+                    "student_email": "STUDENT@EXAMPLE.EDU",
+                    "wallet_address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                },
+            )
+
+        self.assertEqual(r.status_code, 201, r.get_data(as_text=True))
+        self.assertEqual((r.get_json() or {}).get("token_id"), 777)
+        mock_eligibility.assert_called_once_with(token_id=777, issuer_wallet=uni.wallet_address)
+
+        claim = StudentClaimRequest.query.filter_by(token_id=777).first()
+        self.assertIsNotNone(claim)
+        self.assertIsNone(claim.mint_batch_row_id)
+        self.assertEqual(claim.cert_id, "CERT-SM-CLAIM")
+        self.assertEqual(claim.student_email, "student@example.edu")
+
+        listed = self.client.get(
+            "/api/university/student-claim-requests",
+            headers=self._uni_jwt_single_mint(user),
+        )
+        self.assertEqual(listed.status_code, 200, listed.get_data(as_text=True))
+        requests = (listed.get_json() or {}).get("requests") or []
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0].get("student_full_name"), "Single Claim Student")
+        self.assertEqual(requests[0].get("degree_title"), "BSc Claims")
+        self._cleanup_mint_fixtures()
 
 
 if __name__ == "__main__":
