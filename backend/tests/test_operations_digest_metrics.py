@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, MintBatch, MintBatchRow, University, User
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -189,6 +189,68 @@ class OperationsDigestMetricsTests(unittest.TestCase):
         tok = create_access_token(identity=str(user.id), additional_claims={"role": "university"})
         return {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
 
+    def _cleanup_batch_freeze_fixtures(self) -> None:
+        MintBatchRow.query.delete()
+        MintBatch.query.delete()
+        CertificateRecord.query.delete()
+        MintAuthorizationRequest.query.delete()
+        User.query.filter(User.email == "batchfreeze@example.edu").delete(synchronize_session=False)
+        University.query.filter_by(internal_id="batch-freeze-test-uni").delete(synchronize_session=False)
+        db.session.commit()
+
+    def _seed_frozen_batch_authorization_fixture(self) -> tuple[University, User, MintBatch]:
+        uni = University(
+            name="Batch Freeze Uni",
+            internal_id="batch-freeze-test-uni",
+            domain_email="example.edu",
+            wallet_address="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+            status="verified",
+            eip712_nonce=0,
+            eip712_single_nonce=0,
+            eip712_batch_nonce=0,
+            is_frozen=True,
+            institution_contact_email="registrar@example.edu",
+            institution_contact_phone="+10000000000",
+            institution_website="https://example.edu",
+            institution_license_id="LIC-2",
+            institution_license_authority="Board",
+            institution_license_valid_until="2035-12-31",
+        )
+        db.session.add(uni)
+        db.session.flush()
+        user = User(email="batchfreeze@example.edu", role="university", university_id=uni.id)
+        user.set_password("testpass123")
+        db.session.add(user)
+        db.session.flush()
+        batch = MintBatch(
+            university_id=uni.id,
+            status="processing",
+            original_filename="freeze.csv",
+            total_rows=1,
+            valid_rows=1,
+            invalid_rows=0,
+            created_by_user_id=user.id,
+        )
+        db.session.add(batch)
+        db.session.flush()
+        db.session.add(
+            MintBatchRow(
+                batch_id=batch.id,
+                row_index=0,
+                cert_id="CERT-FROZEN-BATCH-1",
+                student_internal_id="SID-1",
+                student_email="student@example.edu",
+                student_full_name="Frozen Student",
+                degree_title="BSc",
+                issue_date="2024-06-01",
+                metadata_uri="ipfs://bafyfreeze",
+                core_hash="0x" + "a" * 64,
+                row_status="prepared",
+            )
+        )
+        db.session.commit()
+        return uni, user, batch
+
     def test_core_hash_only_five_fields(self) -> None:
         from app.routes import api as api_mod
 
@@ -200,6 +262,27 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             "issue_date": "2020-01-01",
         }
         self.assertTrue(api_mod._core_hash_hex(meta).startswith("0x"))
+
+    def test_batch_eip712_blocked_for_frozen_university_without_mutation(self) -> None:
+        from app import mint_batch_routes as batch_mod
+
+        self._cleanup_batch_freeze_fixtures()
+        _, user, batch = self._seed_frozen_batch_authorization_fixture()
+        try:
+            with patch.object(batch_mod.blockchain_service, "get_w3") as mock_get_w3:
+                r = self.client.get(
+                    f"/api/university/mint-batches/{batch.id}/eip712",
+                    headers=self._uni_jwt_single_mint(user),
+                )
+
+            self.assertEqual(r.status_code, 403, r.get_data(as_text=True))
+            mock_get_w3.assert_not_called()
+            db.session.refresh(batch)
+            self.assertIsNone(batch.authorized_commitment_hex)
+            self.assertIsNone(batch.authorized_payload_json)
+            self.assertIsNone(CertificateRecord.query.filter_by(cert_id="CERT-FROZEN-BATCH-1").first())
+        finally:
+            self._cleanup_batch_freeze_fixtures()
 
     def test_prepare_single_mint_invalid_email_400(self) -> None:
         self._cleanup_mint_fixtures()

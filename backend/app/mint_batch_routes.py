@@ -709,6 +709,9 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         uni = user.university
         if not uni or uni.status != "verified":
             return jsonify({"error": "University is not verified"}), 403
+        fr = freeze_guard_response(uni)
+        if fr:
+            return fr
         b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
         if not b:
             return jsonify({"error": "Batch not found"}), 404
