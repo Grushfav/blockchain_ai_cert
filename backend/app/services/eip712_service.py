@@ -53,9 +53,9 @@ def get_verifying_contract_checksum() -> str:
     override = (Config.EIP712_VERIFYING_CONTRACT or "").strip()
     if override:
         return Web3.to_checksum_address(override)
-    addr = (Config.TRUCERT_CONTRACT_ADDRESS or "").strip()
+    addr = (Config.TRUECERT_CONTRACT_ADDRESS or "").strip()
     if not addr:
-        raise ValueError("TRUCERT_CONTRACT_ADDRESS is not set (needed for EIP-712 domain)")
+        raise ValueError("TRUECERT_CONTRACT_ADDRESS is not set (needed for EIP-712 domain)")
     return Web3.to_checksum_address(addr)
 
 

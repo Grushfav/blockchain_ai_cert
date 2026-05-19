@@ -17,7 +17,7 @@ def pin_certificate_metadata(
 
     body = {
         "pinataContent": metadata,
-        "pinataMetadata": {"name": f"trucert-{token_id}.json"},
+        "pinataMetadata": {"name": f"truecert-{token_id}.json"},
     }
     r = requests.post(
         "https://api.pinata.cloud/pinning/pinJSONToIPFS",

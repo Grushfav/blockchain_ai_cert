@@ -344,7 +344,7 @@ def register_admin_analytics_routes(bp: Blueprint) -> None:
             return jsonify(out), 200
 
         system_instruction = (
-            "You write short operational briefings for TruCert platform administrators. "
+            "You write short operational briefings for TrueCert platform administrators. "
             "Use ONLY the JSON facts provided; do not invent numbers, users, or events. "
             "Never include or guess personal identifiers (names of individuals, emails, wallet addresses, token ids). "
             "Do not claim fraud, abuse, illegality, or wrongdoing; use neutral, cautious language. "
@@ -392,7 +392,7 @@ def register_admin_analytics_routes(bp: Blueprint) -> None:
             return jsonify(out), 200
 
         system_instruction = (
-            "You are an operations analyst for TruCert administrators. "
+            "You are an operations analyst for TrueCert administrators. "
             "You will receive ONLY a JSON object of aggregate platform metrics (no raw rows, no personal data). "
             "You must ONLY restate numbers and relationships that appear in that JSON—never invent incidents, "
             "entities, or causes. Do not claim fraud, abuse, or proof of wrongdoing; use cautious, neutral wording. "
@@ -537,7 +537,7 @@ def register_admin_analytics_routes(bp: Blueprint) -> None:
                     (r.details_json or "").replace("\n", " ").replace("\r", " ")[:8000],
                 ]
             )
-        name = f"trucert-activity-log-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.csv"
+        name = f"truecert-activity-log-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.csv"
         return Response(
             buf.getvalue(),
             mimetype="text/csv",

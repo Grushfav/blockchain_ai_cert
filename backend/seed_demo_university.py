@@ -4,7 +4,7 @@ Create a demo university login + random issuer wallet (no private key stored on 
 Run from the backend folder with the venv activated:
   .\\.venv\\Scripts\\python seed_demo_university.py
 
-Requires backend/.env with SECRET_KEY and (for on-chain approve) TRUCERT_CONTRACT_ADDRESS +
+Requires backend/.env with SECRET_KEY and (for on-chain approve) TRUECERT_CONTRACT_ADDRESS +
 CONTRACT_OWNER_PRIVATE_KEY.
 
 The script prints a one-time demo private key to stdout so you can import that account into
@@ -28,7 +28,7 @@ from app.models import University, User
 from app.services import blockchain_service
 
 DEMO_INTERNAL_ID = os.environ.get("DEMO_UNI_INTERNAL_ID", "UWI-DEMO-2026-001")
-DEMO_EMAIL = os.environ.get("DEMO_UNI_EMAIL", "trucert.demo@uwitest.edu.jm")
+DEMO_EMAIL = os.environ.get("DEMO_UNI_EMAIL", "truecert.demo@uwitest.edu.jm")
 DEMO_PASSWORD = os.environ.get("DEMO_UNI_PASSWORD", "DemoUwi2026!")
 DEMO_DOMAIN = "uwitest.edu.jm"
 
@@ -52,7 +52,7 @@ def main() -> int:
         wallet = acc.address
 
         uni = University(
-            name="UWI TruCert Demo (Test)",
+            name="UWI TrueCert Demo (Test)",
             internal_id=DEMO_INTERNAL_ID,
             domain_email=DEMO_DOMAIN,
             wallet_address=wallet,
@@ -63,7 +63,7 @@ def main() -> int:
             institution_license_authority="Jamaica Tertiary Commission",
             institution_license_valid_until="2030-12-31",
             status="pending",
-            kyc_notes="Seeded demo university for TruCert testing.",
+            kyc_notes="Seeded demo university for TrueCert testing.",
         )
         user = User(email=DEMO_EMAIL.lower(), role="university")
         user.set_password(DEMO_PASSWORD)
@@ -77,7 +77,7 @@ def main() -> int:
         print(f"  issuer_wallet: {wallet}")
         print()
 
-        if Config.TRUCERT_CONTRACT_ADDRESS and Config.CONTRACT_OWNER_PRIVATE_KEY:
+        if Config.TRUECERT_CONTRACT_ADDRESS and Config.CONTRACT_OWNER_PRIVATE_KEY:
             try:
                 w3 = blockchain_service.get_w3()
                 contract = blockchain_service.get_contract(w3)
@@ -91,7 +91,7 @@ def main() -> int:
                 print("You can approve manually from /admin when the RPC/keys are correct.")
                 return 1
         else:
-            print("TRUCERT_CONTRACT_ADDRESS or CONTRACT_OWNER_PRIVATE_KEY missing — left as pending.")
+            print("TRUECERT_CONTRACT_ADDRESS or CONTRACT_OWNER_PRIVATE_KEY missing — left as pending.")
             print("Approve in Admin UI after fixing env.")
 
         print()

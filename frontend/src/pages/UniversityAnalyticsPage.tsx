@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiJson } from "../api/client";
+import { ONBOARDING_METRICS_FLAG } from "../hooks/useOnboardingProgress";
 import { TablePagination } from "../components/TablePagination";
 import { usePagination } from "../hooks/usePagination";
 import { MintHeatmapGrid, MintTimeseriesLineChart } from "../components/MintAnalyticsCharts";
@@ -162,6 +163,10 @@ export function UniversityAnalyticsPage() {
   const recentPg = usePagination(recent, 10);
   const batchesPg = usePagination(batches, 10, batchOffset);
   const detailRowsPg = usePagination(detail?.rows ?? [], 10, detailId ?? "none");
+
+  useEffect(() => {
+    sessionStorage.setItem(ONBOARDING_METRICS_FLAG, "1");
+  }, []);
 
   const loadSummary = useCallback(async () => {
     setSumErr(null);

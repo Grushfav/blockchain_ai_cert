@@ -1,15 +1,23 @@
 import os
 from pathlib import Path
 
-# Stable DB path regardless of cwd (relative sqlite:///trucert.db breaks when the IDE runs Flask from the repo root).
+# Stable DB path regardless of cwd (relative sqlite:///truecert.db breaks when the IDE runs Flask from the repo root).
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _INSTANCE_DIR = _BACKEND_DIR / "instance"
 
 
 def _default_sqlite_uri() -> str:
     _INSTANCE_DIR.mkdir(exist_ok=True)
-    db_path = (_INSTANCE_DIR / "trucert.db").resolve()
+    db_path = (_INSTANCE_DIR / "truecert.db").resolve()
     return f"sqlite:///{db_path.as_posix()}"
+
+
+def _env(primary: str, legacy: str = "") -> str:
+    """Read env var; fall back to legacy TRUCERT_* names from older deployments."""
+    v = (os.environ.get(primary) or "").strip()
+    if v:
+        return v
+    return (os.environ.get(legacy) or "").strip() if legacy else ""
 
 
 class Config:
@@ -24,19 +32,19 @@ class Config:
         "POLYGON_AMOY_RPC_FALLBACK_URLS",
         "https://polygon-amoy-bor-rpc.publicnode.com",
     )
-    TRUCERT_CONTRACT_ADDRESS = os.environ.get("TRUCERT_CONTRACT_ADDRESS", "")
+    TRUECERT_CONTRACT_ADDRESS = _env("TRUECERT_CONTRACT_ADDRESS", "TRUCERT_CONTRACT_ADDRESS")
 
     # Signs whitelist / admin contract calls (must be contract owner).
     CONTRACT_OWNER_PRIVATE_KEY = os.environ.get("CONTRACT_OWNER_PRIVATE_KEY", "")
 
     # Platform minter hot wallet — submits mintForIssuer after EIP-712 university authorization.
-    TRUCERT_MINTER_PRIVATE_KEY = os.environ.get("TRUCERT_MINTER_PRIVATE_KEY", "")
+    TRUECERT_MINTER_PRIVATE_KEY = _env("TRUECERT_MINTER_PRIVATE_KEY", "TRUCERT_MINTER_PRIVATE_KEY")
 
     # EIP-712 ({MintAuthorization},{BatchMintAuthorization}) — domain matches MetaMask / ethers signTypedData.
-    EIP712_DOMAIN_NAME = os.environ.get("EIP712_DOMAIN_NAME", "TruCert")
+    EIP712_DOMAIN_NAME = os.environ.get("EIP712_DOMAIN_NAME", "TrueCert")
     EIP712_DOMAIN_VERSION = os.environ.get("EIP712_DOMAIN_VERSION", "1")
     EIP712_CHAIN_ID = int(os.environ.get("EIP712_CHAIN_ID", "80002"))
-    # Optional override; defaults to TRUCERT_CONTRACT_ADDRESS (the TruCert ERC-721).
+    # Optional override; defaults to TRUECERT_CONTRACT_ADDRESS (the TrueCert ERC-721).
     EIP712_VERIFYING_CONTRACT = os.environ.get("EIP712_VERIFYING_CONTRACT", "").strip()
 
     PINATA_JWT = os.environ.get("PINATA_JWT", "")
@@ -48,10 +56,10 @@ class Config:
     PUBLIC_METADATA_BASE_URL = _pub_meta.rstrip("/")
 
     # Metadata signature (Ed25519) settings.
-    TRUCERT_SIG_KID = os.environ.get("TRUCERT_SIG_KID", "")
-    TRUCERT_SIG_PRIVATE_KEY = os.environ.get("TRUCERT_SIG_PRIVATE_KEY", "")
+    TRUECERT_SIG_KID = _env("TRUECERT_SIG_KID", "TRUCERT_SIG_KID")
+    TRUECERT_SIG_PRIVATE_KEY = _env("TRUECERT_SIG_PRIVATE_KEY", "TRUCERT_SIG_PRIVATE_KEY")
     # JSON map {"kid": "base64-or-hex-encoded-public-key", ...}
-    TRUCERT_SIG_PUBLIC_KEYS = os.environ.get("TRUCERT_SIG_PUBLIC_KEYS", "")
+    TRUECERT_SIG_PUBLIC_KEYS = _env("TRUECERT_SIG_PUBLIC_KEYS", "TRUCERT_SIG_PUBLIC_KEYS")
 
     UNIVERSITY_LOGO_MAX_BYTES = int(os.environ.get("UNIVERSITY_LOGO_MAX_BYTES", str(2 * 1024 * 1024)))
     MINT_BATCH_MAX_ROWS = int(os.environ.get("MINT_BATCH_MAX_ROWS", "500"))

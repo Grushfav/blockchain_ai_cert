@@ -192,7 +192,7 @@ export function RegisterPage() {
         <h1>Register university</h1>
         <p>
           Submit your institution for manual verification in three short steps. Your login password and issuer wallet
-          address are handled like the rest of TruCert: private keys stay in your wallet and are never sent to our
+          address are handled like the rest of TrueCert: private keys stay in your wallet and are never sent to our
           servers.
         </p>
       </header>
@@ -308,7 +308,7 @@ export function RegisterPage() {
                   />
                 </div>
                 <p className="muted-inline small" style={{ marginTop: "0.35rem" }}>
-                  Paste your public issuer address only. Never paste a private key or seed phrase anywhere in TruCert.
+                  Paste your public issuer address only. Never paste a private key or seed phrase anywhere in TrueCert.
                 </p>
               </div>
             </>

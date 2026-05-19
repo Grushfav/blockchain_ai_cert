@@ -41,10 +41,10 @@ const KNOWN_META_KEYS: { key: string; label: string }[] = [
 ];
 
 const SIG_FIELD_KEYS = new Set([
-  "trucert_sig_v",
-  "trucert_sig_kid",
-  "trucert_sig_alg",
-  "trucert_sig",
+  "truecert_sig_v",
+  "truecert_sig_kid",
+  "truecert_sig_alg",
+  "truecert_sig",
 ]);
 
 function normHash(h: string | null | undefined): string {
@@ -259,7 +259,7 @@ export function VerifyResultView({ result }: { result: FieldVerifyResponse }) {
             Core hash: {coreMatch === true ? "Pass" : coreMatch === false ? "Fail" : "Not checked"}
           </span>
           <span className={sigBadge.className} title={sig?.reason ? String(sig.reason) : undefined}>
-            TruCert signature: {sigBadge.label}
+            TrueCert signature: {sigBadge.label}
           </span>
         </div>
       </div>

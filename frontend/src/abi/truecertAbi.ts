@@ -1,6 +1,10 @@
-export const TRUCERT_ABI = [
+export const TRUECERT_ABI = [
   "function nextTokenId() view returns (uint256)",
   "function minter() view returns (address)",
+  "function ownerOf(uint256 tokenId) view returns (address)",
+  "function issuerOf(uint256 tokenId) view returns (address)",
+  "function locked(uint256 tokenId) view returns (bool)",
+  "function valid(uint256 tokenId) view returns (bool)",
   "event CertificateMinted(uint256 indexed tokenId, address indexed issuer, string tokenURI, bytes32 coreHash, string certId)",
   "function mintForIssuer(address issuer, string uri, bytes32 coreHash, string certId) returns (uint256)",
   "function claim(uint256 tokenId, address student)",

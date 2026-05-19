@@ -20,7 +20,7 @@ from app.models import User
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Create or update a TruCert admin user.")
+    p = argparse.ArgumentParser(description="Create or update a TrueCert admin user.")
     p.add_argument("email", help="Login email (stored lowercase)")
     p.add_argument("password", help="Password for this admin")
     args = p.parse_args()

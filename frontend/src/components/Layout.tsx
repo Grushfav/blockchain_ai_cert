@@ -2,7 +2,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-do
 import { useEffect, useRef, useState } from "react";
 import { BrowserProvider } from "ethers";
 import { useAuth } from "../AuthContext";
-import trucertLogo from "../images/trucert_logo.png";
+import truecertLogo from "../images/truecert_logo.png";
 import { apiJson } from "../api/client";
 import { BusyLabel } from "./LoadingSpinner";
 import {
@@ -24,6 +24,7 @@ import {
   GraduationCap,
   Bell,
   ServerCog,
+  ListChecks,
 } from "lucide-react";
 
 
@@ -40,6 +41,7 @@ export function Layout() {
     loc.pathname === "/" ||
     loc.pathname === "/verify" ||
     loc.pathname === "/claim" ||
+    loc.pathname === "/onboarding" ||
     loc.pathname === "/admin" ||
     loc.pathname.startsWith("/admin/analytics") ||
     loc.pathname.startsWith("/admin/overview") ||
@@ -300,10 +302,10 @@ export function Layout() {
         <div className="app-sidebar__brand">
           <Link to="/" className="app-sidebar__brand-link" onClick={() => setSidebarOpen(false)}>
             <span className="app-sidebar__logo-wrap">
-              <img src={trucertLogo} alt="" className="app-sidebar__logo-img" width={76} height={76} />
+              <img src={truecertLogo} alt="" className="app-sidebar__logo-img" width={76} height={76} />
             </span>
             <span className="app-sidebar__brand-text">
-              <span className="app-sidebar__brand-title">TruCert</span>
+              <span className="app-sidebar__brand-title">TrueCert</span>
               <span className="app-sidebar__brand-sub">{subtitle}</span>
             </span>
           </Link>
@@ -327,6 +329,18 @@ export function Layout() {
                       <BadgeCheck />
                     </span>
                     <span className="app-sidebar__label">Claim</span>
+                  </NavLink>
+                </li>
+                <li>
+                  <NavLink
+                    to="/onboarding"
+                    className={({ isActive }) => sidebarNavClass(isActive)}
+                    onClick={() => setSidebarOpen(false)}
+                  >
+                    <span className="app-sidebar__icon" aria-hidden>
+                      <ListChecks />
+                    </span>
+                    <span className="app-sidebar__label">Onboarding</span>
                   </NavLink>
                 </li>
               </>
@@ -468,6 +482,18 @@ export function Layout() {
                     <span className="app-sidebar__label">Risk</span>
                   </NavLink>
                 </li>
+                <li>
+                  <NavLink
+                    to="/onboarding"
+                    className={({ isActive }) => sidebarNavClass(isActive)}
+                    onClick={() => setSidebarOpen(false)}
+                  >
+                    <span className="app-sidebar__icon" aria-hidden>
+                      <ListChecks />
+                    </span>
+                    <span className="app-sidebar__label">Onboarding</span>
+                  </NavLink>
+                </li>
               </>
             )}
           </ul>
@@ -533,8 +559,8 @@ export function Layout() {
           </button>
 
           <Link to="/" className="app-topbar__brand-mobile">
-            <img src={trucertLogo} alt="" className="app-topbar__logo" />
-            TruCert
+            <img src={truecertLogo} alt="" className="app-topbar__logo" />
+            TrueCert
           </Link>
 
           <div className="app-topbar__fill" />

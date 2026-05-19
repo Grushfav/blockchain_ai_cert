@@ -1,5 +1,5 @@
 import { Link, useSearchParams } from "react-router-dom";
-import { BrowserProvider, Contract, isAddress, parseUnits, type Signer } from "ethers";
+import { BrowserProvider, Contract, getAddress, isAddress, parseUnits, type Signer } from "ethers";
 import { BatchMintProgressStepper } from "../components/BatchMintProgressStepper";
 import { BrandedLoader } from "../components/BrandedLoader";
 import { BusyLabel } from "../components/LoadingSpinner";
@@ -7,7 +7,7 @@ import { MintTimeInsightCard, type MintTimeInsightsPayload } from "../components
 import type { Eip1193Provider } from "ethers";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { API_BASE, ApiHttpError, apiFormData, apiJson, getStoredToken } from "../api/client";
-import { TRUCERT_ABI } from "../abi/trucertAbi";
+import { TRUECERT_ABI } from "../abi/truecertAbi";
 import {
   InstitutionBottomNav,
   institutionPortalHref,
@@ -499,7 +499,67 @@ export function UniversityPage() {
         "matches your registered issuer address."
       );
     }
+    if (hay.includes("0xc1ab6dc1") || (hay.includes("invalidtoken") && hay.includes("revert"))) {
+      return (
+        "This token cannot be claimed: it may not exist, you may be using the wrong token ID, or your connected wallet " +
+        "is not the current owner. After minting, use the token ID from the success message (not the prepare hint if another " +
+        "mint happened in between). On Polygonscan, confirm your issuer wallet owns the NFT."
+      );
+    }
+    if (hay.includes("0xa4420a95") || hay.includes("soulbound")) {
+      return "This credential is already claimed and locked (soulbound).";
+    }
     return raw;
+  }
+
+  async function preflightClaim(
+    contract: Contract,
+    provider: BrowserProvider,
+    issuerAddress: string,
+    tokenId: number,
+    studentRaw: string
+  ): Promise<string> {
+    const student = getAddress(studentRaw.trim());
+    if (student.toLowerCase() === issuerAddress.toLowerCase()) {
+      throw new Error("Recipient wallet must be different from your issuer wallet.");
+    }
+    let owner: string;
+    try {
+      owner = await contract.ownerOf(tokenId);
+    } catch {
+      throw new Error(
+        `Token #${tokenId} does not exist on this contract. Use the token ID from your mint success message.`
+      );
+    }
+    const issuerOnChain: string = await contract.issuerOf(tokenId);
+    const locked: boolean = await contract.locked(tokenId);
+    const valid: boolean = await contract.valid(tokenId);
+    const ownerCs = getAddress(owner);
+    const issuerCs = getAddress(issuerAddress);
+    if (getAddress(issuerOnChain).toLowerCase() !== issuerCs.toLowerCase()) {
+      throw new Error("This token was not issued by your institution on-chain.");
+    }
+    if (!valid) {
+      throw new Error("This credential was revoked on-chain and cannot be claimed.");
+    }
+    if (locked) {
+      throw new Error("This credential is already claimed and locked (soulbound).");
+    }
+    if (ownerCs.toLowerCase() !== issuerCs.toLowerCase()) {
+      throw new Error(
+        `Your issuer wallet does not hold this NFT (owner is ${ownerCs.slice(0, 6)}…${ownerCs.slice(-4)}). ` +
+          "Connect the wallet that received the mint."
+      );
+    }
+    const bal = await provider.getBalance(issuerCs);
+    const minGas = parseUnits("0.002", "ether");
+    if (bal < minGas) {
+      throw new Error(
+        "Your issuer wallet needs a small amount of Amoy POL to pay claim gas (minting gas is paid by the platform minter, " +
+          "not your wallet). Fund your issuer address from https://faucet.polygon.technology/ and retry."
+      );
+    }
+    return student;
   }
 
   async function ensureAmoyNetwork(ethereum: Eip1193Provider, chainId: number) {
@@ -555,7 +615,7 @@ export function UniversityPage() {
         "Connected wallet does not match your approved issuer address. Connect the wallet you registered as issuer."
       );
     }
-    return { contract: new Contract(me.contract_address, TRUCERT_ABI, signer), provider };
+    return { contract: new Contract(me.contract_address, TRUECERT_ABI, signer), provider };
   }
 
   function normalizeEip712Message(
@@ -1113,7 +1173,8 @@ export function UniversityPage() {
     setClaimBusy(true);
     try {
       const { contract, provider } = await getSignerContract();
-      const tx = await contract.claim(tid, studentWallet.trim(), await amoyFeeOverrides(provider));
+      const student = await preflightClaim(contract, provider, me!.wallet_address, tid, studentWallet);
+      const tx = await contract.claim(tid, student, await amoyFeeOverrides(provider));
       const receipt = await tx.wait();
       setClaimMsg(`Claimed. Tx: ${receipt.hash}`);
     } catch (caught: unknown) {
@@ -1407,7 +1468,7 @@ export function UniversityPage() {
     try {
       const fd = new FormData();
       fd.append("file", logoFile);
-      const token = localStorage.getItem("trucert_token");
+      const token = localStorage.getItem("truecert_token");
       const headers: Record<string, string> = {};
       if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch(`${API_BASE}/api/university/logo`, { method: "POST", headers, body: fd });
@@ -2358,7 +2419,7 @@ export function UniversityPage() {
                     </div>
                     <p className="ai-summary__disclaimer" style={{ marginTop: 0 }}>
                       <em>
-                        Advisory only. TruCert validation and on-chain rules are authoritative. Email and internal student IDs are
+                        Advisory only. TrueCert validation and on-chain rules are authoritative. Email and internal student IDs are
                         not sent to the model.
                       </em>
                     </p>
@@ -2550,12 +2611,13 @@ export function UniversityPage() {
       <section className="panel">
         <h2 className="subhead">Claim (transfer to student &amp; lock)</h2>
         <p className="muted-inline">
-          You must be connected as the issuer; the student address is only the recipient parameter.
+          You must be connected as the issuer; the student address is only the recipient parameter.{" "}
+          <strong>Your issuer wallet pays claim gas</strong> (not the platform minter used for minting).
         </p>
-        {/* <p className="muted-inline small" style={{ marginTop: "0.35rem" }}>
-          The issuer wallet pays gas on Amoy — it needs a small POL balance (testnet faucet). If MetaMask shows a vague
-          “estimateGas” error, check POL balance and that this wallet still owns the token.
-        </p> */}
+        <p className="muted-inline small" style={{ marginTop: "0.35rem" }}>
+          Use the token ID from the mint success message. If another mint ran between prepare and submit, the on-chain ID
+          may differ from the prepare hint.
+        </p>
         <form className="stack" onSubmit={claim}>
           <div className="row two-col">
             <div className="inst-field">

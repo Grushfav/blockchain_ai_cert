@@ -1,11 +1,11 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
-describe("TruCert", function () {
+describe("TrueCert", function () {
   async function deploy() {
     const [admin, uni, student, other, platform] = await ethers.getSigners();
-    const TruCert = await ethers.getContractFactory("TruCert");
-    const c = await TruCert.deploy(admin.address);
+    const TrueCert = await ethers.getContractFactory("TrueCert");
+    const c = await TrueCert.deploy(admin.address);
     await c.waitForDeployment();
     await c.connect(admin).setIssuerWhitelisted(uni.address, true);
     await c.connect(admin).setMinter(platform.address);

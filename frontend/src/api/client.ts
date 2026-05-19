@@ -7,8 +7,8 @@ const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined) ||
   (import.meta.env.DEV ? "" : "http://127.0.0.1:5000");
 
-const TOKEN_KEY = "trucert_token";
-const ROLE_KEY = "trucert_role";
+const TOKEN_KEY = "truecert_token";
+const ROLE_KEY = "truecert_role";
 
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);

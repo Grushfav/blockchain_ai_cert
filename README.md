@@ -1,4 +1,4 @@
-# TruCert (COMP 3901 capstone)
+# TrueCert (COMP 3901 capstone)
 
 Blockchain-based academic credential verification on **Polygon Amoy** with **Flask + SQLAlchemy**, **IPFS (Pinata)**, and a **React university portal**. **Mints** use a platform **minter hot wallet** (`mintForIssuer`) after the university signs an **EIP-712 authorization** (gasless). **Claim / revoke / burn / reissue** remain **issuer wallet** transactions in MetaMask.
 
@@ -6,10 +6,10 @@ Blockchain-based academic credential verification on **Polygon Amoy** with **Fla
 
 | Path | Purpose |
 |------|---------|
-| `contracts/TruCert.sol` | ERC-721: whitelist issuers, mint to escrow, claim (lock), revoke, burn, reissue |
+| `contracts/TrueCert.sol` | ERC-721: whitelist issuers, mint to escrow, claim (lock), revoke, burn, reissue |
 | `hardhat.config.js` | Solidity 0.8.27, `polygonAmoy` network |
 | `scripts/deploy.js` | Deploy contract (owner = deployer) |
-| `test/TruCert.js` | Hardhat tests |
+| `test/TrueCert.js` | Hardhat tests |
 | `backend/` | Flask REST API, SQLAlchemy models, metadata signing, Pinata integration |
 | `frontend/` | Marketing home, verify UI, and university portal (wallet-signed issuance) |
 
@@ -18,10 +18,10 @@ Blockchain-based academic credential verification on **Polygon Amoy** with **Fla
 **On-chain:** `tokenId`, `issuerOf`, `ownerOf`, `locked`, `valid`, `tokenURI`, `coreHashOf`.
 
 **Off-chain JSON (IPFS):** rich presentation fields + institution profile + Ed25519 signature envelope:
-- `trucert_sig_v`
-- `trucert_sig_kid`
-- `trucert_sig_alg = ed25519`
-- `trucert_sig` (base64)
+- `truecert_sig_v`
+- `truecert_sig_kid`
+- `truecert_sig_alg = ed25519`
+- `truecert_sig` (base64)
 
 Canonical signature payload is JSON-serialized with sorted keys and compact separators.
 
@@ -29,7 +29,96 @@ Canonical signature payload is JSON-serialized with sorted keys and compact sepa
 
 - Node.js 18+ (Hardhat + frontend)
 - Python 3.11+ (backend)
-- MetaMask or another **injected wallet** with **Amoy MATIC** ([faucet](https://faucet.polygon.technology/))
+- MetaMask or another **injected wallet** with **Amoy POL** on Polygon Amoy ([faucet](https://faucet.polygon.technology/))
+
+## Demo onboarding walkthrough
+
+The React app includes an interactive guide with a **progress bar** at **`/onboarding`** (sidebar **Onboarding**, or **Demo onboarding guide** on the home page). Progress is saved in the browser and auto-updates when you connect a wallet, log in, mint, verify, or open Analytics.
+
+**Suggested order (8 steps):**
+
+### Step 1 — Install a crypto wallet and fund Amoy POL
+
+1. Install [MetaMask](https://metamask.io/download/) (or another EVM wallet).
+2. Add the **Polygon Amoy** test network (chain ID **80002**, RPC `https://rpc-amoy.polygon.technology`).
+3. Request test **POL** from the [Polygon faucet](https://faucet.polygon.technology/) for the wallet you will register as the **issuer** address.
+
+Mint gas is paid by the platform **minter**; your **issuer** wallet still needs POL for **claim**, **revoke**, and other on-chain actions.
+
+| Install MetaMask | Request test POL |
+|------------------|------------------|
+| ![Download MetaMask](frontend/src/images/download_metamask_step1.png) | ![Request POL on Amoy faucet](frontend/src/images/request_POL_matic.png) |
+
+### Step 2 — Register an institution
+
+Open **`/register`** and complete the wizard. Paste your **public issuer wallet** (`0x…`) only — never a private key or seed phrase.
+
+![University registration](frontend/src/images/register_university_step2.png)
+
+### Step 3 — Admin login and whitelist issuer
+
+1. Log in at **`/login`** with the bootstrap admin (`BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` in `backend/.env` on first startup).
+2. Open **`/admin`**, review the pending institution, and click **Approve** to whitelist the issuer wallet on-chain.
+
+| Admin login | Approve & whitelist |
+|-------------|---------------------|
+| ![Admin login](frontend/src/images/admin_login_2.5.png) | ![Whitelist institution](frontend/src/images/whitelist_institution_step3.png) |
+
+### Step 4 — Connect issuer wallet
+
+1. Log in as the **institution** contact you registered.
+2. Open **`/university?mode=settings`** (Wallet) or use the sidebar **Connect issuer wallet** control.
+3. Confirm the portal shows **issuer wallet ready** on chain **80002** (Amoy).
+
+![Connect issuer wallet](frontend/src/images/connect_issuer_wallet.png)
+
+### Step 5 — Mint a certificate
+
+1. With the issuer wallet connected, go to **`/university`** (Issue tab).
+2. **Generate credential** → sign the EIP-712 authorization in MetaMask (no gas) → **Submit mint**.
+3. Note the **token ID** from the success message (use it for verify and claim).
+
+| Institution portal | Sign mint authorization |
+|--------------------|-------------------------|
+| ![Login and mint flow](frontend/src/images/login_mint_1stcert.png) | ![Sign in MetaMask](frontend/src/images/mint_cert_sign_wallet.png) |
+
+### Step 6 — Verify a certificate
+
+Open **`/verify`**. Verify by **token ID** or by credential fields. Confirm on-chain status and signed metadata.
+
+![Public verification](frontend/src/images/verify_cert.png)
+
+### Step 7 — Lifecycle actions on a certificate
+
+Open **`/university?mode=actions`**. **Claim** transfers the NFT to a student wallet and locks it (soulbound). **Revoke**, **Burn**, and **Reissue** are also issuer-wallet transactions.
+
+![Claim, revoke, burn, reissue](frontend/src/images/certificate%20actions.png)
+
+### Step 8 — View issuance metrics
+
+Open **`/university/analytics`** to review mint volume, timing heatmaps, and recent activity.
+
+![Institution analytics](frontend/src/images/view_analytics_metrics.png)
+
+### Onboarding screenshots (reference)
+
+All walkthrough images live under `frontend/src/images/`:
+
+| File | Step |
+|------|------|
+| `download_metamask_step1.png` | 1 — Wallet |
+| `request_POL_matic.png` | 1 — Wallet |
+| `register_university_step2.png` | 2 — Register |
+| `admin_login_2.5.png` | 3 — Admin |
+| `whitelist_institution_step3.png` | 3 — Admin |
+| `connect_issuer_wallet.png` | 4 — Connect wallet |
+| `login_mint_1stcert.png` | 5 — Mint |
+| `mint_cert_sign_wallet.png` | 5 — Mint |
+| `verify_cert.png` | 6 — Verify |
+| `certificate actions.png` | 7 — Actions |
+| `view_analytics_metrics.png` | 8 — Metrics |
+
+Additional UI assets used on the marketing home page: `batch_issuance.png`, `lifecycle_controls.png`, `audit_log.png`, `truecert_logo.png`.
 
 ## 1. Smart contract (local + Amoy)
 
@@ -47,7 +136,7 @@ $env:DEPLOYER_PRIVATE_KEY="0x..."   # funded Amoy account
 npx hardhat run scripts/deploy.js --network polygonAmoy
 ```
 
-Copy the printed contract address into `backend/.env` as `TRUCERT_CONTRACT_ADDRESS`.
+Copy the printed contract address into `backend/.env` as `TRUECERT_CONTRACT_ADDRESS`.
 
 ## 2. Backend setup (Neon Postgres or SQLite fallback)
 
@@ -68,7 +157,7 @@ Used by the pre-login **home** page so contract address, chain id, and Ed25519 v
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/public/config` | `chain_id`, `network_name`, checksum `contract_address`, Amoy Polygonscan `contract_explorer_url`, `platform_minter_address` (if `TRUCERT_MINTER_PRIVATE_KEY` set), `eip712_domain`, `pinata_gateway_base`, optional `active_signing_kid`, `trucert_public_keys` (`kid`, `public_key_base64`, `public_key_hex`), `updated_at` |
+| GET | `/api/public/config` | `chain_id`, `network_name`, checksum `contract_address`, Amoy Polygonscan `contract_explorer_url`, `platform_minter_address` (if `TRUECERT_MINTER_PRIVATE_KEY` set), `eip712_domain`, `pinata_gateway_base`, optional `active_signing_kid`, `truecert_public_keys` (`kid`, `public_key_base64`, `public_key_hex`), `updated_at` |
 | GET | `/api/public/verified-universities` | `{ universities: [{ name, internal_id, logo_url }] }` — **`status=verified` only** (no pending registrations) |
 
 **Frontend:** `/` loads the marketing/trust landing page; `/verify` is the public verification UI. Optional `VITE_REPO_URL` in `frontend/.env` adds a repository link in the home footer. Static batch sample: `frontend/public/samples/batch-mint-example.csv` (also mirrored under repo `samples/`).
@@ -77,16 +166,16 @@ Used by the pre-login **home** page so contract address, chain id, and Ed25519 v
 
 - `SECRET_KEY`
 - `JWT_SECRET_KEY`
-- `TRUCERT_CONTRACT_ADDRESS`
+- `TRUECERT_CONTRACT_ADDRESS`
 - `CONTRACT_OWNER_PRIVATE_KEY` (admin whitelist only)
 - `PINATA_JWT`
-- `TRUCERT_SIG_KID`
-- `TRUCERT_SIG_PRIVATE_KEY` (Ed25519 private key bytes, hex or base64)
-- `TRUCERT_SIG_PUBLIC_KEYS` (JSON map: `{"kid":"hex-or-base64-pubkey"}`)
+- `TRUECERT_SIG_KID`
+- `TRUECERT_SIG_PRIVATE_KEY` (Ed25519 private key bytes, hex or base64)
+- `TRUECERT_SIG_PUBLIC_KEYS` (JSON map: `{"kid":"hex-or-base64-pubkey"}`)
 - `PUBLIC_METADATA_BASE_URL` — **optional** for new single mints. Single mint `tokenURI` is now **`ipfs://…`** (Pinata `pinJSONToIPFS`, same as batch). Keep this set if you need **`/api/public/metadata/<token_id>`** for **legacy** HTTPS tokenURIs or for `submit-authorization` to realign old pending requests. Absolute API base, **no** trailing slash (e.g. `https://api.example.com`). **Alias:** `PUBLIC_METADATA_BASE_URI`. **Local dev:** e.g. `http://127.0.0.1:5000`, or infer from request host on localhost when unset.
-- `TRUCERT_MINTER_PRIVATE_KEY` — **platform** EVM key allowed by `TruCert.minter`; submits `mintForIssuer` (fund with Amoy MATIC for gas). Prefer KMS / HSM in production; env var is fine for the capstone.
-- `EIP712_DOMAIN_NAME` (default `TruCert`), `EIP712_DOMAIN_VERSION` (default `1`), `EIP712_CHAIN_ID` (default `80002`)
-- Optional `EIP712_VERIFYING_CONTRACT` — defaults to `TRUCERT_CONTRACT_ADDRESS` for the typed-data domain
+- `TRUECERT_MINTER_PRIVATE_KEY` — **platform** EVM key allowed by `TrueCert.minter`; submits `mintForIssuer` (fund with Amoy MATIC for gas). Prefer KMS / HSM in production; env var is fine for the capstone.
+- `EIP712_DOMAIN_NAME` (default `TrueCert`), `EIP712_DOMAIN_VERSION` (default `1`), `EIP712_CHAIN_ID` (default `80002`)
+- Optional `EIP712_VERIFYING_CONTRACT` — defaults to `TRUECERT_CONTRACT_ADDRESS` for the typed-data domain
 
 **Optional — Google Gemini (AI helpers, not used for verification):**
 
@@ -96,15 +185,15 @@ Used by the pre-login **home** page so contract address, chain id, and Ed25519 v
 - `GEMINI_VERIFY_EXPLAIN_CACHE_MAX_ENTRIES` — default **500** (in-process eviction when exceeded).
 - `GEMINI_RISK_SUMMARY_CACHE_TTL_SECONDS` — default **180**. Short TTL for optional risk-hints AI (`include_ai_summary`), since aggregates change with live data.
 
-**Privacy:** Third-party LLMs process whatever text you send. Do **not** paste private keys, student or staff email addresses, government IDs, or other sensitive PII into prompts unless you have an explicit policy covering Google’s processing. TruCert does **not** send student or certificate payloads to Gemini automatically; only `POST /api/admin/ai/gemini-test` forwards the `prompt` JSON field you provide.
+**Privacy:** Third-party LLMs process whatever text you send. Do **not** paste private keys, student or staff email addresses, government IDs, or other sensitive PII into prompts unless you have an explicit policy covering Google’s processing. TrueCert does **not** send student or certificate payloads to Gemini automatically; only `POST /api/admin/ai/gemini-test` forwards the `prompt` JSON field you provide.
 
-After deploy, **contract owner** must call `setMinter(<platform_wallet>)` (see `scripts/deploy.js` + `TRUCERT_MINTER_ADDRESS`, or set manually). The minter address must match the account derived from `TRUCERT_MINTER_PRIVATE_KEY`.
+After deploy, **contract owner** must call `setMinter(<platform_wallet>)` (see `scripts/deploy.js` + `TRUECERT_MINTER_ADDRESS`, or set manually). The minter address must match the account derived from `TRUECERT_MINTER_PRIVATE_KEY`.
 
 ### Database
 
 - Use Neon Postgres via `DATABASE_URL`:
   - `postgresql+psycopg://<user>:<password>@<host>/<db>?sslmode=require`
-- If `DATABASE_URL` is missing, backend falls back to local SQLite (`backend/instance/trucert.db`).
+- If `DATABASE_URL` is missing, backend falls back to local SQLite (`backend/instance/truecert.db`).
 - Rotate any leaked credentials and keep `.env` local only.
 
 ### University registration (wallet-only, no private keys)
@@ -133,7 +222,7 @@ If `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` are set, first startup c
 $base = "http://127.0.0.1:5000/api"
 $login = Invoke-RestMethod -Method Post -Uri "$base/auth/login" -ContentType "application/json" -Body (@{ email = "admin@example.com"; password = "your-password" } | ConvertTo-Json)
 $headers = @{ Authorization = "Bearer $($login.access_token)"; "Content-Type" = "application/json" }
-Invoke-RestMethod -Method Post -Uri "$base/admin/ai/gemini-test" -Headers $headers -Body (@{ prompt = "Summarize TruCert in one sentence." } | ConvertTo-Json)
+Invoke-RestMethod -Method Post -Uri "$base/admin/ai/gemini-test" -Headers $headers -Body (@{ prompt = "Summarize TrueCert in one sentence." } | ConvertTo-Json)
 ```
 
 ### Issuer actions (prepare + EIP-712 + platform mint)
@@ -210,7 +299,7 @@ npm run dev
 
 Open the printed URL (default `http://127.0.0.1:5173`). Dev server proxies `/api` to Flask.
 
-**Routes:** `/` home · `/verify` verify · `/login` · `/register` · `/admin` · `/university`.
+**Routes:** `/` home · `/verify` verify · `/claim` student claim requests · `/onboarding` demo walkthrough · `/login` · `/register` · `/admin` · `/university` · `/university/analytics`.
 
 `/university` requires:
 - connected wallet
@@ -276,7 +365,7 @@ Field verification recomputes the canonical core hash, looks up indexed records 
 
 - Never commit real keys. Use Amoy-only keys and rotated secrets.
 - University private keys are never accepted or stored by backend.
-- `TRUCERT_MINTER_PRIVATE_KEY` is a **hot wallet** with on-chain mint power (within `mintForIssuer` rules). Protect like a signing key; prefer KMS in production. Fund it only with test MATIC.
+- `TRUECERT_MINTER_PRIVATE_KEY` is a **hot wallet** with on-chain mint power (within `mintForIssuer` rules). Protect like a signing key; prefer KMS in production. Fund it only with test MATIC.
 - Batch flow **increments `eip712_nonce` on `submit-authorization`**. If `execute` fails mid-batch, you may need a fresh CSV batch or manual DB help — design assumes execute is retried until rows complete.
 - `CONTRACT_OWNER_PRIVATE_KEY` is for platform admin chain actions (whitelist + `setMinter`), not university issuance.
 - Rotate leaked DB/API credentials and keep `.env` local only.

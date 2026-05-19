@@ -142,12 +142,14 @@ export function HomePage() {
           Demo network: {chainLabel}
         </p>
 
-        <Link
-          to="/verify"
-          className="home-mock-cta-link"
-        >
-          Verify Credentials →
-        </Link>
+        <div className="home-mock-hero-ctas">
+          <Link to="/verify" className="home-mock-cta-link">
+            Verify Credentials →
+          </Link>
+          <Link to="/onboarding" className="home-mock-cta-link home-mock-cta-link--secondary">
+            Demo onboarding guide →
+          </Link>
+        </div>
 
       </section>
 
@@ -571,7 +573,7 @@ export function HomePage() {
         </h2>
 
         <p className="home-trust-redesign__intro">
-          TruCert provides transparent
+          TrueCert provides transparent
           verification records so institutions,
           employers, and students can confidently
           trust issued credentials.
@@ -603,7 +605,7 @@ export function HomePage() {
           </div>
 
           <div className="home-trust-kv-card">
-            <div className="home-trust-kv-label">TruCert contract</div>
+            <div className="home-trust-kv-label">TrueCert contract</div>
             <div className="home-trust-kv-value">
               {cfg?.contract_address ? (
                 <code className="home-trust-kv-mono">{cfg.contract_address}</code>
@@ -662,13 +664,13 @@ export function HomePage() {
             Ed25519 public keys
           </h3>
 
-          {!cfg?.trucert_public_keys?.length ? (
+          {!cfg?.truecert_public_keys?.length ? (
             <div className="home-trust-key-card home-trust-key-card--empty">
               <p className="home-trust-key-empty-msg">None published (optional signing)</p>
             </div>
           ) : (
             <div className="home-trust-keys-list">
-              {cfg.trucert_public_keys.map((k) => (
+              {cfg.truecert_public_keys.map((k) => (
                 <div key={k.kid} className="home-trust-key-card">
                   <div className="home-trust-key-row">
                     <span className="home-trust-key-field-label">KID</span>
@@ -713,7 +715,7 @@ export function HomePage() {
     </h2>
 
     <p className="home-register-text">
-      Join trusted institutions using TruCert
+      Join trusted institutions using TrueCert
       to securely issue and verify academic
       credentials.
     </p>
@@ -913,11 +915,11 @@ export function HomePage() {
           <details>
 
             <summary>
-              Why is TruCert secure?
+              Why is TrueCert secure?
             </summary>
 
             <p>
-              TruCert uses secure verification
+              TrueCert uses secure verification
               technology to help protect academic
               credentials from fraud or
               unauthorized changes.
@@ -963,7 +965,7 @@ export function HomePage() {
             <p>
               Only approved and verified
               institutions can issue credentials
-              through TruCert.
+              through TrueCert.
             </p>
 
           </details>
@@ -1034,7 +1036,7 @@ export function HomePage() {
         </nav>
 
         <p className="home-disclaimer">
-          TruCert — COMP 3901 Capstone Project
+          TrueCert — COMP 3901 Capstone Project
         </p>
 
       </footer>

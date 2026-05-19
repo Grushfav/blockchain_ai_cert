@@ -13,6 +13,7 @@ import { UniversityHubPage } from "./pages/UniversityHubPage";
 import { UniversityRiskPage } from "./pages/UniversityRiskPage";
 import { VerifyPage } from "./pages/VerifyPage";
 import { StudentClaimPage } from "./pages/StudentClaimPage";
+import { OnboardingPage } from "./pages/OnboardingPage";
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/verify" element={<VerifyPage />} />
         <Route path="/claim" element={<StudentClaimPage />} />
+        <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route

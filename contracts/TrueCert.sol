@@ -6,11 +6,11 @@ import {ERC721URIStorage} from "@openzeppelin/contracts/token/ERC721/extensions/
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
- * @title TruCert
+ * @title TrueCert
  * @notice Academic certificates as ERC-721 tokens with escrow (university-held) and soulbound (locked) states.
  * @dev Minimal on-chain facts: issuer, ownership, locked, validity, metadata URI. Details live off-chain (IPFS JSON or HTTPS URI).
  */
-contract TruCert is ERC721, ERC721URIStorage, Ownable {
+contract TrueCert is ERC721, ERC721URIStorage, Ownable {
     uint256 public nextTokenId = 1;
 
     /// @notice Original issuing university wallet (set at mint, immutable).
@@ -57,7 +57,7 @@ contract TruCert is ERC721, ERC721URIStorage, Ownable {
         address indexed issuer
     );
 
-    constructor(address initialOwner) ERC721("TruCert Certificate", "TCERT") Ownable(initialOwner) {}
+    constructor(address initialOwner) ERC721("TrueCert Certificate", "TCERT") Ownable(initialOwner) {}
 
     function setIssuerWhitelisted(address issuer, bool allowed) external onlyOwner {
         whitelistedIssuers[issuer] = allowed;

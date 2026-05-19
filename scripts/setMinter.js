@@ -1,13 +1,13 @@
 const hre = require("hardhat");
 
 async function main() {
-  const contractAddress = process.env.TRUCERT_CONTRACT_ADDRESS;
-  const minterAddress = process.env.TRUCERT_MINTER_ADDRESS;
+  const contractAddress = process.env.TRUECERT_CONTRACT_ADDRESS;
+  const minterAddress = process.env.TRUECERT_MINTER_ADDRESS;
   if (!contractAddress) {
-    throw new Error("Missing TRUCERT_CONTRACT_ADDRESS in environment.");
+    throw new Error("Missing TRUECERT_CONTRACT_ADDRESS in environment.");
   }
   if (!minterAddress) {
-    throw new Error("Missing TRUCERT_MINTER_ADDRESS in environment.");
+    throw new Error("Missing TRUECERT_MINTER_ADDRESS in environment.");
   }
 
   const [owner] = await hre.ethers.getSigners();
@@ -17,8 +17,8 @@ async function main() {
     );
   }
 
-  const TruCert = await hre.ethers.getContractFactory("TruCert");
-  const c = TruCert.attach(contractAddress);
+  const TrueCert = await hre.ethers.getContractFactory("TrueCert");
+  const c = TrueCert.attach(contractAddress);
 
   console.log("Owner:", owner.address);
   console.log("Contract:", contractAddress);

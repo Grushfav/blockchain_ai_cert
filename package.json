@@ -1,8 +1,8 @@
 {
-  "name": "trucert",
+  "name": "truecert",
   "version": "1.0.0",
   "private": true,
-  "description": "TruCert — blockchain academic certificates (Polygon, Flask, React)",
+  "description": "TrueCert — blockchain academic certificates (Polygon, Flask, React)",
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",

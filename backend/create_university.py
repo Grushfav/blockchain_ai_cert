@@ -6,7 +6,7 @@ Run from the backend folder:
 
 Optional: set UNI_ISSUER_WALLET_ADDRESS instead of passing the last positional arg.
 
-Optional: --verify-on-chain whitelists the wallet if TRUCERT_CONTRACT_ADDRESS and CONTRACT_OWNER_PRIVATE_KEY are set.
+Optional: --verify-on-chain whitelists the wallet if TRUECERT_CONTRACT_ADDRESS and CONTRACT_OWNER_PRIVATE_KEY are set.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from app.services import blockchain_service
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Create a TruCert university + university user (wallet-only).")
+    p = argparse.ArgumentParser(description="Create a TrueCert university + university user (wallet-only).")
     p.add_argument("name", help="Display name")
     p.add_argument("internal_id", help="Unique internal_id (e.g. accreditation code)")
     p.add_argument("domain_email", help="Email domain only, e.g. example.edu")
@@ -109,7 +109,7 @@ def main() -> int:
         print(f"Created university id={uni.id} issuer_wallet={wallet} (pending).")
         print(f"  Portal login: {contact}")
 
-        if args.verify_on_chain and Config.TRUCERT_CONTRACT_ADDRESS and Config.CONTRACT_OWNER_PRIVATE_KEY:
+        if args.verify_on_chain and Config.TRUECERT_CONTRACT_ADDRESS and Config.CONTRACT_OWNER_PRIVATE_KEY:
             try:
                 w3 = blockchain_service.get_w3()
                 contract = blockchain_service.get_contract(w3)
@@ -121,7 +121,7 @@ def main() -> int:
                 print(f"On-chain whitelist failed: {e}", file=sys.stderr)
                 return 1
         elif args.verify_on_chain:
-            print("TRUCERT_CONTRACT_ADDRESS or CONTRACT_OWNER_PRIVATE_KEY missing; left pending.", file=sys.stderr)
+            print("TRUECERT_CONTRACT_ADDRESS or CONTRACT_OWNER_PRIVATE_KEY missing; left pending.", file=sys.stderr)
 
         return 0
 

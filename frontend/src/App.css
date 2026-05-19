@@ -5749,7 +5749,7 @@ button:disabled:has(.loading-spinner) {
   min-height: 1.15em;
 }
 
-/* —— TruCert branded loader (logo strobe + optional slow overlay rotate) —— */
+/* —— TrueCert branded loader (logo strobe + optional slow overlay rotate) —— */
 .branded-loader {
   display: flex;
   align-items: center;
@@ -7579,4 +7579,262 @@ button.btn-secondary:disabled:has(.busy-label) .loading-spinner {
 
 .uni-dashboard-link-row a:hover {
   color: #93c5fd;
+}
+
+/* —— Onboarding walkthrough —— */
+.onboarding-page {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 0 0 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.onboarding-page__hero {
+  padding: 1.35rem 1.5rem;
+}
+
+.onboarding-page__logo {
+  display: block;
+  width: 4.5rem;
+  height: 4.5rem;
+  margin-bottom: 0.75rem;
+  border-radius: 14px;
+  object-fit: contain;
+}
+
+.onboarding-page__eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+}
+
+.onboarding-page__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.65rem;
+  letter-spacing: -0.03em;
+}
+
+.onboarding-page__lead {
+  margin: 0 0 1.1rem;
+  max-width: 42rem;
+}
+
+.onboarding-progress {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+  margin-bottom: 0.65rem;
+}
+
+.onboarding-progress__bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #6ee7b7);
+  transition: width 0.35s ease;
+}
+
+.onboarding-progress__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.onboarding-progress__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.onboarding-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.onboarding-step {
+  padding: 1.15rem 1.25rem;
+  border-left: 3px solid transparent;
+}
+
+.onboarding-step--highlight {
+  border-left-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(79, 140, 255, 0.12);
+}
+
+.onboarding-step--done {
+  border-left-color: rgba(110, 218, 149, 0.55);
+}
+
+.onboarding-step__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  margin-bottom: 0.55rem;
+}
+
+.onboarding-step__badge {
+  color: var(--muted);
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.onboarding-step__badge--done {
+  color: var(--ok);
+}
+
+.onboarding-step__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  flex-shrink: 0;
+}
+
+.onboarding-step__titles {
+  flex: 1;
+  min-width: 0;
+}
+
+.onboarding-step__kicker {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+
+.onboarding-step__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.onboarding-step__summary {
+  margin: 0 0 0.75rem;
+}
+
+.onboarding-step__figures {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+  margin: 0 0 0.85rem;
+}
+
+.onboarding-step__figures--multi {
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.onboarding-step__figure {
+  margin: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: rgba(8, 12, 22, 0.6);
+}
+
+.onboarding-step__img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 22rem;
+  object-fit: contain;
+  object-position: top center;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.onboarding-step__caption {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.onboarding-step__detail {
+  margin: 0 0 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  background: rgba(14, 21, 36, 0.45);
+  border: 1px solid var(--border-subtle);
+}
+
+.onboarding-step__subhead {
+  margin: 0 0 0.45rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.onboarding-step__list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.onboarding-step__list--ordered {
+  list-style: decimal;
+}
+
+.onboarding-step__list li + li {
+  margin-top: 0.35rem;
+}
+
+.onboarding-step__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.onboarding-step__footer .btn-primary,
+.onboarding-step__footer .btn-secondary,
+.onboarding-step__footer a.btn-primary,
+.onboarding-step__footer a.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.85rem;
+}
+
+.onboarding-page__done {
+  text-align: center;
+  padding: 1.25rem;
+}
+
+.home-mock-hero-ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  margin-top: 0.25rem;
+}
+
+.home-mock-cta-link--secondary {
+  background: transparent;
+  border: 1px solid rgba(79, 140, 255, 0.45);
+  color: var(--accent-hover);
+  box-shadow: none;
+}
+
+.home-mock-cta-link--secondary:hover {
+  background: rgba(79, 140, 255, 0.1);
 }

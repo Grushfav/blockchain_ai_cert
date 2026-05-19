@@ -59,7 +59,7 @@ export async function ensureChain(ethereum: Eip1193Provider, chainId: number): P
 type UniMe = { wallet_address: string; chain_id: number; status: string };
 
 /** Fired after sidebar connect/disconnect so the university portal can resync local issuer state. */
-export const INJECTED_WALLET_SYNC_EVENT = "trucert-injected-wallet-updated";
+export const INJECTED_WALLET_SYNC_EVENT = "truecert-injected-wallet-updated";
 
 export function emitInjectedWalletUpdated(): void {
   if (typeof window === "undefined") return;

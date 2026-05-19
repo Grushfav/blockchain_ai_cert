@@ -54,7 +54,7 @@ export function LoginPage() {
               id="email"
               type="email"
               autoComplete="username"
-              placeholder="admin@trucert.com"
+              placeholder="admin@truecert.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required

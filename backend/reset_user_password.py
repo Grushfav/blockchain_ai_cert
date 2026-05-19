@@ -24,7 +24,7 @@ from app.models import User
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Reset TruCert portal password for an existing user.")
+    p = argparse.ArgumentParser(description="Reset TrueCert portal password for an existing user.")
     p.add_argument("email", help="Login email (matched case-insensitively)")
     p.add_argument("password", help="New password")
     args = p.parse_args()

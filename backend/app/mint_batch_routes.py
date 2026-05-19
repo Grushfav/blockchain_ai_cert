@@ -59,16 +59,16 @@ def _current_user() -> User:
 
 
 def _require_contract_code(w3: Web3) -> str | None:
-    if not Config.TRUCERT_CONTRACT_ADDRESS:
-        return "TRUCERT_CONTRACT_ADDRESS is not configured"
+    if not Config.TRUECERT_CONTRACT_ADDRESS:
+        return "TRUECERT_CONTRACT_ADDRESS is not configured"
     try:
-        checksum = Web3.to_checksum_address(Config.TRUCERT_CONTRACT_ADDRESS.strip())
+        checksum = Web3.to_checksum_address(Config.TRUECERT_CONTRACT_ADDRESS.strip())
     except Exception:
-        return "TRUCERT_CONTRACT_ADDRESS is invalid"
+        return "TRUECERT_CONTRACT_ADDRESS is invalid"
     if len(w3.eth.get_code(checksum)) == 0:
         return (
-            "No contract bytecode found at TRUCERT_CONTRACT_ADDRESS on Polygon Amoy. "
-            "Deploy TruCert and update backend/.env."
+            "No contract bytecode found at TRUECERT_CONTRACT_ADDRESS on Polygon Amoy. "
+            "Deploy TrueCert and update backend/.env."
         )
     return None
 
@@ -260,7 +260,7 @@ def _verify_certificate_mint_receipt(
         return False, "no transaction"
     contract_addr = Web3.to_checksum_address(contract.address)
     if Web3.to_checksum_address(tx["to"]) != contract_addr:
-        return False, "tx not to TruCert contract"
+        return False, "tx not to TrueCert contract"
     tx_from = Web3.to_checksum_address(tx["from"])
     if minter_address:
         if tx_from.lower() != Web3.to_checksum_address(minter_address).lower():
@@ -1294,11 +1294,11 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         }
 
         system_instruction = (
-            "You help university staff sanity-check one CSV batch row before TruCert minting. "
+            "You help university staff sanity-check one CSV batch row before TrueCert minting. "
             "Comment on internal consistency: date format (YYYY-MM-DD), cert_id style, whether name/degree/issue "
             "date look plausible together, and whether row_status matches preparation (e.g. prepared vs pending_validation). "
             "If validation_errors are present, explain them in plain language. "
-            "Advisory only: issuer systems and TruCert server validation are authoritative. "
+            "Advisory only: issuer systems and TrueCert server validation are authoritative. "
             "Never ask for or infer student email or internal student IDs — those were not provided on purpose. "
             "Answer in under 180 words, plain text, no markdown headings or bullet lists."
         )

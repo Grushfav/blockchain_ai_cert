@@ -11,13 +11,22 @@ from app.config import Config
 
 _last_good_rpc_url: str | None = None
 
+# Solidity custom errors from TrueCert.sol (selector = first 4 bytes of keccak(name))
+_CUSTOM_ERROR_LABELS: dict[str, str] = {
+    "0x2013c842": "NotWhitelistedIssuer — issuer wallet is not whitelisted on this contract (re-whitelist after redeploy)",
+    "0xf8d2906c": "NotMinter — platform minter address does not match contract.minter()",
+    "0xa4420a95": "Soulbound",
+    "0xc1ab6dc1": "InvalidToken",
+    "0x54ec5063": "NotIssuer",
+}
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
 def _load_abi() -> list[dict[str, Any]]:
-    p = _project_root() / "artifacts" / "contracts" / "TruCert.sol" / "TruCert.json"
+    p = _project_root() / "artifacts" / "contracts" / "TrueCert.sol" / "TrueCert.json"
     if not p.is_file():
         raise FileNotFoundError(f"Compile contracts first; missing ABI at {p}")
     with p.open(encoding="utf-8") as f:
@@ -69,10 +78,47 @@ def get_w3() -> Web3:
 
 
 def get_contract(w3: Web3) -> Contract:
-    addr = Config.TRUCERT_CONTRACT_ADDRESS
+    addr = Config.TRUECERT_CONTRACT_ADDRESS
     if not addr:
-        raise ValueError("TRUCERT_CONTRACT_ADDRESS is not set")
+        raise ValueError("TRUECERT_CONTRACT_ADDRESS is not set")
     return w3.eth.contract(address=Web3.to_checksum_address(addr), abi=_load_abi())
+
+
+def _format_onchain_error(exc: Exception) -> str:
+    if isinstance(exc, ValueError) and exc.args and isinstance(exc.args[0], dict):
+        msg = str(exc.args[0].get("message") or exc.args[0])
+    else:
+        msg = str(exc)
+    low = msg.lower()
+    if "gas required exceeds allowance" in low:
+        return (
+            "RPC reported insufficient POL on the platform minter wallet for this gas limit "
+            f"({msg}). If the minter balance is healthy, the mint may be reverting on-chain "
+            "(e.g. issuer not whitelisted on this contract deployment)."
+        )
+    for sel, label in _CUSTOM_ERROR_LABELS.items():
+        if sel in low:
+            return label
+    return msg
+
+
+def _assert_minter_can_pay(w3: Web3, account: Any, built: dict[str, Any]) -> None:
+    gas = int(built.get("gas") or 0)
+    if gas <= 0:
+        gas = int(w3.eth.estimate_gas(built) * 1.2)
+        built["gas"] = gas
+    fee = built.get("maxFeePerGas") or built.get("gasPrice")
+    if fee is None:
+        return
+    need = gas * int(fee)
+    bal = int(w3.eth.get_balance(account.address))
+    if bal < need:
+        pol = w3.from_wei(bal, "ether")
+        need_pol = w3.from_wei(need, "ether")
+        raise RuntimeError(
+            f"Platform minter {account.address} balance too low for mint gas "
+            f"(have {pol} POL, need up to ~{need_pol} POL at current fees)."
+        )
 
 
 def _build_and_send_raw_tx(
@@ -85,7 +131,7 @@ def _build_and_send_raw_tx(
     fn = getattr(contract.functions, fn_name)
     base: dict[str, Any] = {
         "from": account.address,
-        "nonce": w3.eth.get_transaction_count(account.address),
+        "nonce": w3.eth.get_transaction_count(account.address, "pending"),
         "chainId": w3.eth.chain_id,
     }
     latest = w3.eth.get_block("latest")
@@ -103,11 +149,22 @@ def _build_and_send_raw_tx(
     else:
         base["gasPrice"] = w3.eth.gas_price
 
-    built = fn(*args).build_transaction(base)
-    built.setdefault("gas", int(w3.eth.estimate_gas(built) * 1.2))
+    built = fn(*args).build_transaction({**base, "gas": 500_000})
+    try:
+        fn(*args).call({"from": account.address})
+    except Exception as e:
+        raise RuntimeError(_format_onchain_error(e)) from e
+    try:
+        built["gas"] = int(w3.eth.estimate_gas(built) * 1.2)
+    except Exception as e:
+        raise RuntimeError(_format_onchain_error(e)) from e
+    _assert_minter_can_pay(w3, account, built)
     signed = account.sign_transaction(built)
     raw = signed.raw_transaction if hasattr(signed, "raw_transaction") else signed.rawTransaction
-    tx_hash = w3.eth.send_raw_transaction(raw)
+    try:
+        tx_hash = w3.eth.send_raw_transaction(raw)
+    except Exception as e:
+        raise RuntimeError(_format_onchain_error(e)) from e
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
     if receipt["status"] != 1:
         raise RuntimeError(f"Transaction failed: {tx_hash.hex()}")
@@ -128,9 +185,9 @@ def send_contract_tx(
 
 
 def minter_account_address() -> str:
-    pk = (Config.TRUCERT_MINTER_PRIVATE_KEY or "").strip()
+    pk = (Config.TRUECERT_MINTER_PRIVATE_KEY or "").strip()
     if not pk:
-        raise ValueError("TRUCERT_MINTER_PRIVATE_KEY is not set")
+        raise ValueError("TRUECERT_MINTER_PRIVATE_KEY is not set")
     return Account.from_key(pk).address
 
 
@@ -143,9 +200,9 @@ def mint_for_issuer(
     cert_id: str,
 ) -> tuple[int, str]:
     """Platform minter submits mintForIssuer; returns (token_id, tx_hash_hex)."""
-    pk = (Config.TRUCERT_MINTER_PRIVATE_KEY or "").strip()
+    pk = (Config.TRUECERT_MINTER_PRIVATE_KEY or "").strip()
     if not pk:
-        raise ValueError("TRUCERT_MINTER_PRIVATE_KEY is not set")
+        raise ValueError("TRUECERT_MINTER_PRIVATE_KEY is not set")
     ch = (core_hash_hex or "").strip()
     if not ch.startswith("0x"):
         ch = "0x" + ch

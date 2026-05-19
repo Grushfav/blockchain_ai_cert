@@ -230,16 +230,16 @@ class OperationsDigestMetricsTests(unittest.TestCase):
 
         orig_pub = app_config.Config.PUBLIC_METADATA_BASE_URL
         orig_jwt = app_config.Config.PINATA_JWT
-        orig_kid = app_config.Config.TRUCERT_SIG_KID
-        orig_priv = app_config.Config.TRUCERT_SIG_PRIVATE_KEY
-        orig_pubkeys = app_config.Config.TRUCERT_SIG_PUBLIC_KEYS
+        orig_kid = app_config.Config.TRUECERT_SIG_KID
+        orig_priv = app_config.Config.TRUECERT_SIG_PRIVATE_KEY
+        orig_pubkeys = app_config.Config.TRUECERT_SIG_PUBLIC_KEYS
         app_config.Config.PUBLIC_METADATA_BASE_URL = ""
         app_config.Config.PINATA_JWT = "test-jwt-placeholder"
-        app_config.Config.TRUCERT_SIG_KID = "unit-test"
-        app_config.Config.TRUCERT_SIG_PRIVATE_KEY = (
+        app_config.Config.TRUECERT_SIG_KID = "unit-test"
+        app_config.Config.TRUECERT_SIG_PRIVATE_KEY = (
             "0x2ce2795dc16073228f97a72d58e7b2694422336912356849487544a36d8ed6eb"
         )
-        app_config.Config.TRUCERT_SIG_PUBLIC_KEYS = (
+        app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = (
             '{"unit-test": "0x72f2d39a93d51d639c441592b0c399394d7fdab70d6ac9011e54e24ec76fd4ee"}'
         )
 
@@ -283,9 +283,9 @@ class OperationsDigestMetricsTests(unittest.TestCase):
         finally:
             app_config.Config.PUBLIC_METADATA_BASE_URL = orig_pub
             app_config.Config.PINATA_JWT = orig_jwt
-            app_config.Config.TRUCERT_SIG_KID = orig_kid
-            app_config.Config.TRUCERT_SIG_PRIVATE_KEY = orig_priv
-            app_config.Config.TRUCERT_SIG_PUBLIC_KEYS = orig_pubkeys
+            app_config.Config.TRUECERT_SIG_KID = orig_kid
+            app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
+            app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
 
 

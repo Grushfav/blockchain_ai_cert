@@ -352,16 +352,16 @@ def _merge_registration_payload() -> tuple[dict[str, Any], list[Any], list[str]]
 
 
 def _require_contract_code(w3: Web3) -> str | None:
-    if not Config.TRUCERT_CONTRACT_ADDRESS:
-        return "TRUCERT_CONTRACT_ADDRESS is not configured"
+    if not Config.TRUECERT_CONTRACT_ADDRESS:
+        return "TRUECERT_CONTRACT_ADDRESS is not configured"
     try:
-        checksum = Web3.to_checksum_address(Config.TRUCERT_CONTRACT_ADDRESS.strip())
+        checksum = Web3.to_checksum_address(Config.TRUECERT_CONTRACT_ADDRESS.strip())
     except Exception:
-        return "TRUCERT_CONTRACT_ADDRESS is invalid"
+        return "TRUECERT_CONTRACT_ADDRESS is invalid"
     if len(w3.eth.get_code(checksum)) == 0:
         return (
-            "No contract bytecode found at TRUCERT_CONTRACT_ADDRESS on Polygon Amoy. "
-            "Deploy TruCert and update backend/.env."
+            "No contract bytecode found at TRUECERT_CONTRACT_ADDRESS on Polygon Amoy. "
+            "Deploy TrueCert and update backend/.env."
         )
     return None
 
@@ -576,7 +576,7 @@ def freeze_university(uni_id: int):
     tx = None
     if (
         uni.status == "verified"
-        and (Config.TRUCERT_CONTRACT_ADDRESS or "").strip()
+        and (Config.TRUECERT_CONTRACT_ADDRESS or "").strip()
         and (Config.CONTRACT_OWNER_PRIVATE_KEY or "").strip()
     ):
         try:
@@ -604,7 +604,7 @@ def unfreeze_university(uni_id: int):
     tx = None
     if (
         uni.status == "verified"
-        and (Config.TRUCERT_CONTRACT_ADDRESS or "").strip()
+        and (Config.TRUECERT_CONTRACT_ADDRESS or "").strip()
         and (Config.CONTRACT_OWNER_PRIVATE_KEY or "").strip()
     ):
         try:
@@ -742,7 +742,7 @@ def university_me():
             "internal_id": uni.internal_id,
             "status": uni.status,
             "wallet_address": uni.wallet_address,
-            "contract_address": Config.TRUCERT_CONTRACT_ADDRESS,
+            "contract_address": Config.TRUECERT_CONTRACT_ADDRESS,
             "chain_id": chain_id,
             "eip712_nonce": max(
                 int(uni.eip712_nonce or 0),
@@ -955,8 +955,8 @@ def _build_metadata(
 
     image = (data.get("image") or "").strip() or f"ipfs://{DEFAULT_IMAGE_CID}"
     metadata: dict[str, Any] = {
-        "format": "trucert-v1",
-        "name": f"TruCert Certificate #{cert_id}",
+        "format": "truecert-v1",
+        "name": f"TrueCert Certificate #{cert_id}",
         "description": f"Academic credential issued by {uni.name}",
         "image": image,
         "student_full_name": str(data["student_name"]).strip(),
@@ -979,7 +979,7 @@ def _build_metadata(
 
 
 def _core_hash_hex(metadata: dict[str, Any]) -> str:
-    """Keccak256 of the five TruCert core strings — must match contract; excludes any DB-only issuer fields."""
+    """Keccak256 of the five TrueCert core strings — must match contract; excludes any DB-only issuer fields."""
     digest = Web3.solidity_keccak(
         ["string", "string", "string", "string", "string"],
         [
@@ -996,7 +996,7 @@ def _core_hash_hex(metadata: dict[str, Any]) -> str:
 
 def _signature_status(metadata: dict[str, Any]) -> dict[str, Any]:
     ok, reason = metadata_signing.verify_metadata_signature(metadata)
-    return {"ok": ok, "reason": reason, "kid": metadata.get("trucert_sig_kid")}
+    return {"ok": ok, "reason": reason, "kid": metadata.get("truecert_sig_kid")}
 
 
 def _validate_single_mint_student_contact(data: dict[str, Any]) -> tuple[str, str]:
@@ -1263,7 +1263,7 @@ def submit_mint_authorization():
                 {
                     "error": (
                         "Configured contract ABI does not expose mintForIssuer. "
-                        "You may be pointing at an older TruCert deployment; redeploy and update TRUCERT_CONTRACT_ADDRESS."
+                        "You may be pointing at an older TrueCert deployment; redeploy and update TRUECERT_CONTRACT_ADDRESS."
                     )
                 }
             ),
@@ -1284,7 +1284,7 @@ def submit_mint_authorization():
                     "error": (
                         "Contract minter is not set to this backend's platform minter address. "
                         f"On-chain minter: {onchain_minter or 'unset'}; backend minter: {expected_minter}. "
-                        "As contract owner, call setMinter(<backend minter address>) on the deployed TruCert contract."
+                        "As contract owner, call setMinter(<backend minter address>) on the deployed TrueCert contract."
                     )
                 }
             ),
@@ -1987,16 +1987,16 @@ def sync_university_activity():
 
 @bp.get("/verify/<int:token_id>")
 def verify_token(token_id: int):
-    if not Config.TRUCERT_CONTRACT_ADDRESS:
-        return jsonify({"error": "TRUCERT_CONTRACT_ADDRESS is not configured"}), 503
+    if not Config.TRUECERT_CONTRACT_ADDRESS:
+        return jsonify({"error": "TRUECERT_CONTRACT_ADDRESS is not configured"}), 503
     w3 = blockchain_service.get_w3()
-    checksum = Web3.to_checksum_address(Config.TRUCERT_CONTRACT_ADDRESS.strip())
+    checksum = Web3.to_checksum_address(Config.TRUECERT_CONTRACT_ADDRESS.strip())
     if len(w3.eth.get_code(checksum)) == 0:
         return jsonify(
             {
                 "error": (
-                    "TRUCERT_CONTRACT_ADDRESS has no contract bytecode on Polygon Amoy. "
-                    "Set it to the TruCert address from "
+                    "TRUECERT_CONTRACT_ADDRESS has no contract bytecode on Polygon Amoy. "
+                    "Set it to the TrueCert address from "
                     "`npx hardhat run scripts/deploy.js --network polygonAmoy` — not a university or student wallet."
                 )
             }
@@ -2095,7 +2095,7 @@ def verify_by_fields():
         chain_id = int(w3.eth.chain_id)
     except Exception:
         chain_id = 80002
-    contract_checksum = Web3.to_checksum_address(Config.TRUCERT_CONTRACT_ADDRESS.strip())
+    contract_checksum = Web3.to_checksum_address(Config.TRUECERT_CONTRACT_ADDRESS.strip())
     return jsonify(
         {
             "matched": True,
@@ -2154,7 +2154,7 @@ def _sanitize_verify_explain_payload(payload: dict[str, Any]) -> dict[str, Any]:
             continue
         if "internal_id" in low or low.endswith("_id") and "cert_id" not in low:
             continue
-        if low in {"trucert_sig", "trucert_sig_v", "trucert_sig_kid", "trucert_sig_alg"}:
+        if low in {"truecert_sig", "truecert_sig_v", "truecert_sig_kid", "truecert_sig_alg"}:
             continue
 
     sig = meta_in.get("_signature") if isinstance(meta_in.get("_signature"), dict) else None
@@ -2222,7 +2222,7 @@ def verify_explain():
         return resp
 
     system_instruction = (
-        "You help employers and the public read a TruCert verification result. "
+        "You help employers and the public read a TrueCert verification result. "
         "Output must be exactly two paragraphs separated by one blank line (no markdown, no bullets, no headings). "
         "Paragraph 1 — credential narrative: in plain English, describe what the record appears to be using ONLY "
         "fields present in the JSON (e.g. recipient/student name, degree or program, institution, certificate ID, "
@@ -2493,7 +2493,7 @@ def public_trust_config():
         chain_id = int(w3.eth.chain_id)
     except Exception:
         pass
-    addr = (Config.TRUCERT_CONTRACT_ADDRESS or "").strip()
+    addr = (Config.TRUECERT_CONTRACT_ADDRESS or "").strip()
     checksum = ""
     explorer = ""
     if addr:
@@ -2509,7 +2509,7 @@ def public_trust_config():
         keys = []
     minter_addr = None
     try:
-        if (Config.TRUCERT_MINTER_PRIVATE_KEY or "").strip():
+        if (Config.TRUECERT_MINTER_PRIVATE_KEY or "").strip():
             minter_addr = blockchain_service.minter_account_address()
     except Exception:
         minter_addr = None
@@ -2521,8 +2521,8 @@ def public_trust_config():
             "contract_explorer_url": explorer or None,
             "platform_minter_address": minter_addr,
             "pinata_gateway_base": Config.PINATA_GATEWAY_BASE.rstrip("/"),
-            "active_signing_kid": (Config.TRUCERT_SIG_KID or "").strip() or None,
-            "trucert_public_keys": keys,
+            "active_signing_kid": (Config.TRUECERT_SIG_KID or "").strip() or None,
+            "truecert_public_keys": keys,
             "eip712_domain": {
                 "name": Config.EIP712_DOMAIN_NAME,
                 "version": Config.EIP712_DOMAIN_VERSION,

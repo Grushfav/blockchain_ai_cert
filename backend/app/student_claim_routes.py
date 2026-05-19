@@ -10,7 +10,7 @@ from sqlalchemy import func
 from web3 import Web3
 
 from app.extensions import db
-from app.models import MintBatch, MintBatchRow, StudentClaimRequest, University, User
+from app.models import CertificateRecord, MintBatch, MintBatchRow, StudentClaimRequest, University, User
 from app.services import blockchain_service, notification_service
 from app.university_freeze import freeze_guard_response
 
@@ -53,6 +53,28 @@ def _serialize_request(r: StudentClaimRequest, *, row: MintBatchRow | None = Non
         "student_full_name": name,
         "degree_title": degree,
     }
+
+
+def _find_single_certificate_for_student(
+    *, university_id: int, student_internal_id: str, email: str
+) -> CertificateRecord | None:
+    """Single-mint credentials stored on certificate_records (not mint_batch_rows)."""
+    sid = student_internal_id.strip()
+    em = email.strip().lower()
+    if not sid or not em:
+        return None
+    q = (
+        CertificateRecord.query.filter_by(university_id=int(university_id))
+        .filter(CertificateRecord.token_id.isnot(None))
+        .filter(CertificateRecord.status == "issued")
+        .filter(CertificateRecord.student_internal_id.isnot(None))
+        .filter(CertificateRecord.student_email.isnot(None))
+        .filter(func.lower(func.trim(CertificateRecord.student_email)) == em)
+        .filter(func.trim(CertificateRecord.student_internal_id) == sid)
+        .order_by(CertificateRecord.id.desc())
+    )
+    rows = q.all()
+    return rows[0] if rows else None
 
 
 def _find_mint_row_for_student(*, university_id: int, student_internal_id: str, email: str) -> MintBatchRow | None:
@@ -104,18 +126,27 @@ def register_student_claim_routes(bp: Blueprint) -> None:
             student_internal_id=student_internal_id,
             email=student_email,
         )
+        cert_rec: CertificateRecord | None = None
         if not row or row.token_id is None:
-            return (
-                {
-                    "error": (
-                        "No minted credential matched that institution, student ID, and email. "
-                        "Use the same values your school has on file for your batch upload."
-                    )
-                },
-                404,
+            cert_rec = _find_single_certificate_for_student(
+                university_id=university_id,
+                student_internal_id=student_internal_id,
+                email=student_email,
             )
-
-        tid = int(row.token_id)
+            if not cert_rec or cert_rec.token_id is None:
+                return (
+                    {
+                        "error": (
+                            "No minted credential matched that institution, student ID, and email. "
+                            "Use the same student ID and email your school used when the certificate was issued "
+                            "(single mint or batch upload)."
+                        )
+                    },
+                    404,
+                )
+            tid = int(cert_rec.token_id)
+        else:
+            tid = int(row.token_id)
         ok_chain, chain_err = blockchain_service.escrow_claim_eligibility(
             token_id=tid, issuer_wallet=uni.wallet_address
         )

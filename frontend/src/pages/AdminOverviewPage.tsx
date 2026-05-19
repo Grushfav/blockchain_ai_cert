@@ -346,7 +346,7 @@ export function AdminOverviewPage() {
                 </dd>
               </div>
               <div className="admin-overview__trust-item">
-                <dt>TruCert contract</dt>
+                <dt>TrueCert contract</dt>
                 <dd>
                   {trustCfg.contract_address ? (
                     <>
@@ -389,11 +389,11 @@ export function AdminOverviewPage() {
             </dl>
             <div className="admin-overview__trust-keys">
               <h3 className="admin-overview__trust-keys-heading">Verification keys (Ed25519)</h3>
-              {!trustCfg.trucert_public_keys?.length ? (
+              {!trustCfg.truecert_public_keys?.length ? (
                 <p className="muted-inline small">None published.</p>
               ) : (
                 <ul className="admin-overview__trust-key-list">
-                  {trustCfg.trucert_public_keys.map((k, i) => (
+                  {trustCfg.truecert_public_keys.map((k, i) => (
                     <li key={k.kid || `public-key-${i}`}>
                       <span className="admin-overview__trust-key-kid">
                         <code className="mono">{k.kid || "—"}</code>

@@ -1,11 +1,11 @@
 ---
-working_title: "TruCert — Blockchain Academic Credentials on Polygon Amoy"
+working_title: "TrueCert — Blockchain Academic Credentials on Polygon Amoy"
 document_type: "COMP3901 Final Technical Report"
 group: "[Group member names]"
 date: "2026-05-14"
 ---
 
-# TruCert — Blockchain Academic Credentials on Polygon Amoy
+# TrueCert — Blockchain Academic Credentials on Polygon Amoy
 
 **COMP3901 Final Technical Report**
 
@@ -17,11 +17,11 @@ date: "2026-05-14"
 
 ## Executive Summary
 
-Academic credential fraud and fragmented verification motivate systems that bind issuer identity, credential content, and public auditability. **TruCert** is a capstone web application that issues digital certificates as **ERC-721** non-fungible tokens on **Polygon Amoy** (EVM testnet), with rich metadata on **IPFS** (Pinata) and a **Flask** backend for preparation, indexing, and analytics. **Universities never deposit private keys on the server**: they register a public issuer address, sign **EIP-712** authorizations for mints (single and batch) in the browser, and the platform **minter** hot wallet alone calls `mintForIssuer`. After minting, credentials live in **escrow** in the issuer wallet until **claim** locks them as **soulbound**; **revoke**, **burn**, and **reissue** are also **wallet-initiated** from the React university portal (`UniversityPage.tsx`), matching the smart contract’s access control.
+Academic credential fraud and fragmented verification motivate systems that bind issuer identity, credential content, and public auditability. **TrueCert** is a capstone web application that issues digital certificates as **ERC-721** non-fungible tokens on **Polygon Amoy** (EVM testnet), with rich metadata on **IPFS** (Pinata) and a **Flask** backend for preparation, indexing, and analytics. **Universities never deposit private keys on the server**: they register a public issuer address, sign **EIP-712** authorizations for mints (single and batch) in the browser, and the platform **minter** hot wallet alone calls `mintForIssuer`. After minting, credentials live in **escrow** in the issuer wallet until **claim** locks them as **soulbound**; **revoke**, **burn**, and **reissue** are also **wallet-initiated** from the React university portal (`UniversityPage.tsx`), matching the smart contract’s access control.
 
-What was built: a Solidity contract (`TruCert.sol`), Hardhat tooling and **seven** automated contract tests, a JWT-protected REST API (public verify routes without auth), CSV batch minting with one batch EIP-712 commitment, optional **Google Gemini** helpers (verify explanation, risk summaries) with in-process caching (`ai_response_cache.py`), and a **React + TypeScript + Vite** frontend using **ethers v6** and `fetch`.
+What was built: a Solidity contract (`TrueCert.sol`), Hardhat tooling and **seven** automated contract tests, a JWT-protected REST API (public verify routes without auth), CSV batch minting with one batch EIP-712 commitment, optional **Google Gemini** helpers (verify explanation, risk summaries) with in-process caching (`ai_response_cache.py`), and a **React + TypeScript + Vite** frontend using **ethers v6** and `fetch`.
 
-Main limitations are environmental, not conceptual: **testnet** funds and RPC reliability, **IPFS** gateway and Pinata availability, and **server-held keys** for the platform minter, contract owner actions, and **Ed25519** metadata signing (`TRUCERT_SIG_*`) — the latter attests content integrity as the **platform**, not the university. Future work should address **mainnet** readiness (KMS/HSM for minter and signing keys), durable job queues for large batches, **HTTPS** metadata policies where institutions require it, stronger **LMS** integration, and exploration of **DID**-oriented issuer profiles while preserving the current clear separation between on-chain issuer address and off-chain presentation.
+Main limitations are environmental, not conceptual: **testnet** funds and RPC reliability, **IPFS** gateway and Pinata availability, and **server-held keys** for the platform minter, contract owner actions, and **Ed25519** metadata signing (`TRUECERT_SIG_*`) — the latter attests content integrity as the **platform**, not the university. Future work should address **mainnet** readiness (KMS/HSM for minter and signing keys), durable job queues for large batches, **HTTPS** metadata policies where institutions require it, stronger **LMS** integration, and exploration of **DID**-oriented issuer profiles while preserving the current clear separation between on-chain issuer address and off-chain presentation.
 
 ---
 
@@ -60,7 +60,7 @@ The project’s objectives, as reflected in the repository, are to:
 
 ### 2.1 EVM, MetaMask, and ERC-721
 
-The **Ethereum Virtual Machine** executes deterministic smart contracts. **MetaMask** (or similar) injects `window.ethereum`, allowing the frontend to request chain changes, send transactions, and sign typed data. **ERC-721** defines non-fungible tokens with `ownerOf`, transfers, and optional `tokenURI` for metadata. TruCert extends OpenZeppelin’s `ERC721` + `ERC721URIStorage` and adds domain-specific state and hooks.
+The **Ethereum Virtual Machine** executes deterministic smart contracts. **MetaMask** (or similar) injects `window.ethereum`, allowing the frontend to request chain changes, send transactions, and sign typed data. **ERC-721** defines non-fungible tokens with `ownerOf`, transfers, and optional `tokenURI` for metadata. TrueCert extends OpenZeppelin’s `ERC721` + `ERC721URIStorage` and adds domain-specific state and hooks.
 
 ### 2.2 Polygon Amoy as development testnet
 
@@ -72,10 +72,10 @@ Each credential’s substantive fields are hashed to a **core hash** (bytes32) s
 
 ### 2.4 EIP-712 vs Ed25519 metadata signing
 
-| Mechanism | Signer | Purpose in TruCert |
+| Mechanism | Signer | Purpose in TrueCert |
 |-----------|--------|---------------------|
 | **EIP-712** (`MintAuthorization`, `BatchMintAuthorization`) | University **issuer EVM wallet** | Authorize specific mint commitments and nonces; recovered address must match registered `wallet_address` and on-chain whitelist. |
-| **Ed25519** (`metadata_signing.py`, `TRUCERT_SIG_*`) | **Platform** key material | Sign canonical JSON metadata pinned to IPFS; verifiers load public keys from `/api/public/config`. **Not** a university signature. |
+| **Ed25519** (`metadata_signing.py`, `TRUECERT_SIG_*`) | **Platform** key material | Sign canonical JSON metadata pinned to IPFS; verifiers load public keys from `/api/public/config`. **Not** a university signature. |
 
 ### 2.5 IPFS / Pinata vs DB and HTTPS metadata
 
@@ -85,9 +85,9 @@ Each credential’s substantive fields are hashed to a **core hash** (bytes32) s
 
 ### 2.6 Related systems
 
-- **Blockcerts-style stacks** historically combined anchoring and Merkle proofs with open verification; TruCert instead anchors **per-credential** NFT state and uses **EIP-712** for batch/single issuance authorization.
-- **Pure IPFS credentials** without on-chain anchors lack a single global revocation/ownership story; TruCert uses **on-chain** `valid` and `locked`.
-- **SBT (soulbound token) patterns** often mint non-transferable tokens directly; TruCert uses **escrow then claim** so the issuer wallet holds the token until the student supplies an address.
+- **Blockcerts-style stacks** historically combined anchoring and Merkle proofs with open verification; TrueCert instead anchors **per-credential** NFT state and uses **EIP-712** for batch/single issuance authorization.
+- **Pure IPFS credentials** without on-chain anchors lack a single global revocation/ownership story; TrueCert uses **on-chain** `valid` and `locked`.
+- **SBT (soulbound token) patterns** often mint non-transferable tokens directly; TrueCert uses **escrow then claim** so the issuer wallet holds the token until the student supplies an address.
 
 ---
 
@@ -110,7 +110,7 @@ flowchart TB
     ORM[(SQLAlchemy / Postgres or SQLite)]
   end
   subgraph Chain["Polygon Amoy"]
-    SC[TruCert.sol]
+    SC[TrueCert.sol]
   end
   subgraph External["External services"]
     PIN[Pinata IPFS]
@@ -129,7 +129,7 @@ flowchart TB
   SVC --> GEM
 ```
 
-**C4-style context (concise):** The **university user** is a person using the browser; the **system** (TruCert) includes SPA + Flask + DB + workers implied by synchronous batch execute; **external systems** are MetaMask, RPC, Pinata, and optionally Gemini.
+**C4-style context (concise):** The **university user** is a person using the browser; the **system** (TrueCert) includes SPA + Flask + DB + workers implied by synchronous batch execute; **external systems** are MetaMask, RPC, Pinata, and optionally Gemini.
 
 ### 3.2 Architecture decomposition
 
@@ -139,15 +139,15 @@ flowchart TB
 | **API** | Flask blueprint `routes/api.py` with registered modules: `mint_batch_routes`, `student_claim_routes`, `admin_analytics_routes`, `university_analytics_routes`. |
 | **Domain services** | Blockchain reads/writes, EIP-712 message construction and recovery, metadata canonicalization and Ed25519 signatures, Pinata uploads, optional Gemini calls with TTL caches. |
 | **Persistence** | SQLAlchemy models (`models.py`), `ActivityLog` ingestion from chain events where implemented. |
-| **On-chain** | `TruCert.sol` — whitelist, minter role, mint, claim, revoke, burn, reissue. |
+| **On-chain** | `TrueCert.sol` — whitelist, minter role, mint, claim, revoke, burn, reissue. |
 
 ### 3.3 Trust boundaries
 
 - **Issuer EVM private keys** never leave the browser; Flask endpoints prepare typed data and accept **signatures**, not secrets.
-- **Platform minter** private key (`TRUCERT_MINTER_PRIVATE_KEY`) can only invoke `mintForIssuer` and is constrained by **whitelist** and **NotMinter** checks.
+- **Platform minter** private key (`TRUECERT_MINTER_PRIVATE_KEY`) can only invoke `mintForIssuer` and is constrained by **whitelist** and **NotMinter** checks.
 - **Contract owner** key (`CONTRACT_OWNER_PRIVATE_KEY`) is for **admin** chain actions such as whitelist updates — separate from universities.
 - **Claim / revoke / burn / reissue:** Implemented in `UniversityPage.tsx` by building a contract instance and calling `claim`, `revokeCertificate`, `burnCertificate`, and `revokeAndReissue` with the **connected issuer wallet** (after optional `prepare-reissue` API for metadata). Flask does **not** submit these as the issuer.
-- **Ed25519** keys attest metadata bytes as **TruCert platform** content, disclosed via `/api/public/config` public keys — verifiers must understand this is **not** a substitute for EIP-712 issuer authorization of mints.
+- **Ed25519** keys attest metadata bytes as **TrueCert platform** content, disclosed via `/api/public/config` public keys — verifiers must understand this is **not** a substitute for EIP-712 issuer authorization of mints.
 
 ### 3.4 Tradeoffs
 
@@ -157,7 +157,7 @@ flowchart TB
 - **EIP-712 batch authorization:** One signature amortizes user effort over many rows; commitment construction is order-independent for row multiset (`batch_mint_commitment`).
 - **Minimal on-chain state:** Rich display stays off-chain; chain stores commitments and lifecycle flags — cheaper but verifier must fetch metadata.
 
-### 3.5 Smart contract summary (`contracts/TruCert.sol`)
+### 3.5 Smart contract summary (`contracts/TrueCert.sol`)
 
 **State variables (high level):** `nextTokenId`; mappings `issuerOf`, `coreHashOf`, `locked`, `valid`, `whitelistedIssuers`; `minter` address; custom errors `Soulbound`, `NotWhitelistedIssuer`, `InvalidToken`, `NotIssuer`, `NotMinter`.
 
@@ -296,7 +296,7 @@ The database stores `eip712_single_nonce` and `eip712_batch_nonce` on `Universit
 - **JWT RBAC:** Access tokens embed role claims; `_require_roles` guards admin vs university routes (`api.py`).
 - **Nonce and expiry:** EIP-712 messages include `nonce` and `expiry`; successful authorization advances the appropriate university nonce field.
 - **Whitelist:** On-chain `whitelistedIssuers` must be true for the recovered issuer before mint; admin approval path triggers owner actions (`README.md`).
-- **Metadata signature verification:** `verify_metadata_signature` checks `trucert_sig_alg == "ed25519"`, known `kid`, and Ed25519 signature over canonical JSON without signature fields (`metadata_signing.py`). Verification flows combine chain state, indexed DB, and this metadata check as implemented in `api.py`.
+- **Metadata signature verification:** `verify_metadata_signature` checks `truecert_sig_alg == "ed25519"`, known `kid`, and Ed25519 signature over canonical JSON without signature fields (`metadata_signing.py`). Verification flows combine chain state, indexed DB, and this metadata check as implemented in `api.py`.
 
 ### 3.11 Challenges (grounded in repository docs and code)
 
@@ -308,7 +308,7 @@ The database stores `eip712_single_nonce` and `eip712_batch_nonce` on `Universit
 
 ### 3.12 Testing
 
-**Hardhat contract tests** (`test/TruCert.js`): **7** tests, all passing in a healthy environment (`npx hardhat test`).
+**Hardhat contract tests** (`test/TrueCert.js`): **7** tests, all passing in a healthy environment (`npx hardhat test`).
 
 | # | Test name (paraphrased) | What it covers |
 |---|-------------------------|----------------|
@@ -325,7 +325,7 @@ The database stores `eip712_single_nonce` and `eip712_batch_nonce` on `Universit
 ### 3.13 Scalability and expansion
 
 - **Job queue:** Today batch execute performs sequential mints in-request; a worker queue would improve tail latency and timeouts for large cohorts.
-- **KMS/HSM:** Protect `TRUCERT_MINTER_PRIVATE_KEY`, `CONTRACT_OWNER_PRIVATE_KEY`, and `TRUCERT_SIG_PRIVATE_KEY` beyond environment variables.
+- **KMS/HSM:** Protect `TRUECERT_MINTER_PRIVATE_KEY`, `CONTRACT_OWNER_PRIVATE_KEY`, and `TRUECERT_SIG_PRIVATE_KEY` beyond environment variables.
 - **Mainnet:** Requires economic design for gas, legal review, and Pinata/production IPFS strategy.
 - **HTTPS metadata:** Some enterprises require TLS fetchability without IPFS gateways; `PUBLIC_METADATA_BASE_URL` path exists for legacy alignment.
 - **LMS / DID:** LMS integration for roster ingest and DID methods for issuer discovery are natural extensions outside current scope.
@@ -338,12 +338,12 @@ The database stores `eip712_single_nonce` and `eip712_batch_nonce` on `Universit
 
 | Objective | Evidence in repository |
 |-----------|-------------------------|
-| ERC-721 credentials with lifecycle | `contracts/TruCert.sol`; OpenZeppelin extensions |
+| ERC-721 credentials with lifecycle | `contracts/TrueCert.sol`; OpenZeppelin extensions |
 | Issuer keys not on server | `README.md`; `UniversityPage.tsx` wallet calls; API prepares typed data only |
 | Gasless mint authorization | EIP-712 in `eip712_service.py`; submit routes in `api.py` / `mint_batch_routes.py` |
 | Batch CSV issuance | `mint_batch_routes.py`, `MintBatch` / `MintBatchRow` models |
 | Public verification | `GET /api/verify/<token_id>`, `VerifyPage.tsx` |
-| Contract correctness baseline | `test/TruCert.js` — **7/7** tests |
+| Contract correctness baseline | `test/TrueCert.js` — **7/7** tests |
 | Optional AI helpers | `gemini_service.py`, `ai_response_cache.py`, verify/risk UI disclaimers |
 
 ### 4.2 Metrics
@@ -362,7 +362,7 @@ See `docs/figures/README.md` for a fuller capture checklist.
 
 ## 5. Conclusions
 
-TruCert meets the original problem framing for a **course-scale** system: cryptographic binding between institutions, credentials, and a public audit trail, with a pragmatic split between **issuer-signed mint policy** (EIP-712) and **platform-signed presentation metadata** (Ed25519). The largest architectural bet — **platform minter** — trades university gas costs for centralized key custody that must be hardened for production.
+TrueCert meets the original problem framing for a **course-scale** system: cryptographic binding between institutions, credentials, and a public audit trail, with a pragmatic split between **issuer-signed mint policy** (EIP-712) and **platform-signed presentation metadata** (Ed25519). The largest architectural bet — **platform minter** — trades university gas costs for centralized key custody that must be hardened for production.
 
 **What we would do differently with hindsight:** introduce an asynchronous mint worker earlier to avoid long HTTP requests on large batches; add richer automated integration tests beyond Solidity unit tests; and standardize operational runbooks for RPC provider failover.
 
@@ -375,14 +375,14 @@ TruCert meets the original problem framing for a **course-scale** system: crypto
 ## Appendix A. Configuration and secrets
 
 - **Environment template:** `backend/env.example.conf` — copy to `.env` locally; **do not commit** filled secrets.
-- **Key paths:** `contracts/TruCert.sol`, `test/TruCert.js`, `backend/app/`, `frontend/src/`, `README.md`, `hardhat.config.js`, `scripts/deploy.js`.
-- **Do not commit:** `.env` files, real `PINATA_JWT`, `GEMINI_API_KEY`, private keys (`TRUCERT_MINTER_PRIVATE_KEY`, `CONTRACT_OWNER_PRIVATE_KEY`, `DEPLOYER_PRIVATE_KEY`, `TRUCERT_SIG_PRIVATE_KEY`), or production database URLs in public repos.
+- **Key paths:** `contracts/TrueCert.sol`, `test/TrueCert.js`, `backend/app/`, `frontend/src/`, `README.md`, `hardhat.config.js`, `scripts/deploy.js`.
+- **Do not commit:** `.env` files, real `PINATA_JWT`, `GEMINI_API_KEY`, private keys (`TRUECERT_MINTER_PRIVATE_KEY`, `CONTRACT_OWNER_PRIVATE_KEY`, `DEPLOYER_PRIVATE_KEY`, `TRUECERT_SIG_PRIVATE_KEY`), or production database URLs in public repos.
 
 ---
 
 ## Appendix B. Contract interface reference (frontend)
 
-The TypeScript ABI mirror in `frontend/src/abi/trucertAbi.ts` includes `mintForIssuer`, `claim`, `revokeCertificate`, `burnCertificate`, and `revokeAndReissue` — consistent with `TruCert.sol` for wallet-side calls.
+The TypeScript ABI mirror in `frontend/src/abi/truecertAbi.ts` includes `mintForIssuer`, `claim`, `revokeCertificate`, `burnCertificate`, and `revokeAndReissue` — consistent with `TrueCert.sol` for wallet-side calls.
 
 ---
 

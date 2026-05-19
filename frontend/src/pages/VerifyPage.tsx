@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { API_BASE } from "../api/client";
+import { ONBOARDING_VERIFY_FLAG } from "../hooks/useOnboardingProgress";
 import {
   Building,
   User,
@@ -252,6 +253,7 @@ export function VerifyPage() {
         on_chain: data.on_chain,
         off_chain_metadata: data.off_chain_metadata,
       });
+      sessionStorage.setItem(ONBOARDING_VERIFY_FLAG, "1");
     } catch (caught: unknown) {
       setTokenErr(caught instanceof Error ? caught.message : "Network error");
     } finally {
@@ -297,6 +299,7 @@ export function VerifyPage() {
       }
       setFieldResult(data);
       if (data.matched) {
+        sessionStorage.setItem(ONBOARDING_VERIFY_FLAG, "1");
         setShowTokenFallback(false);
       } else {
         setShowTokenFallback(true);
@@ -476,7 +479,7 @@ export function VerifyPage() {
             </h2>
           </div>
           <p className="verify-mock-panel__hint muted-inline small">
-            Reads the TruCert contract on the RPC configured for this deployment and fetches IPFS metadata when present.
+            Reads the TrueCert contract on the RPC configured for this deployment and fetches IPFS metadata when present.
           </p>
           <form className="stack verify-form verify-form--mock" onSubmit={verifyByToken}>
             <div className="inst-field">
@@ -549,7 +552,7 @@ export function VerifyPage() {
         </div>
       </section>
 
-      <footer className="verify-mock-footer">TruCert — UWI capstone · Flask API + Polygon + IPFS (Pinata)</footer>
+      <footer className="verify-mock-footer">TrueCert — UWI capstone · Flask API + Polygon + IPFS (Pinata)</footer>
     </div>
   );
 }
