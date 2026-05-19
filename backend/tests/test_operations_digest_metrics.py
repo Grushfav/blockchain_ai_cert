@@ -7,7 +7,16 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    StudentClaimRequest,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -152,6 +161,9 @@ class OperationsDigestMetricsTests(unittest.TestCase):
     # --- Single-mint HTTPS metadata (same app/db lifecycle as class; must run before tearDownClass drop_all) ---
 
     def _cleanup_mint_fixtures(self) -> None:
+        StudentClaimRequest.query.delete()
+        MintBatchRow.query.delete()
+        MintBatch.query.delete()
         MintAuthorizationRequest.query.delete()
         CertificateRecord.query.delete()
         User.query.filter(User.email == "singlemint@example.edu").delete(synchronize_session=False)
@@ -287,6 +299,172 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUCERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUCERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+    def test_submit_single_mint_collision_consumes_authorization(self) -> None:
+        from app.routes import api as api_mod
+
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        existing = CertificateRecord(
+            token_id=99,
+            university_id=uni.id,
+            cert_id="CERT-OTHER",
+            ipfs_uri="ipfs://other",
+            core_hash="0x" + "1" * 64,
+            status="issued",
+        )
+        req = MintAuthorizationRequest(
+            id="mint-request-collision",
+            university_id=uni.id,
+            cert_id="CERT-COLLIDE",
+            core_hash="0x" + "2" * 64,
+            metadata_uri="ipfs://new",
+            expected_token_id=99,
+            student_internal_id="IID-C",
+            student_email="student@example.edu",
+            commitment_hex="0x" + "a" * 64,
+            nonce_snapshot=0,
+            expiry_unix=4_102_444_800,
+            status="pending",
+        )
+        db.session.add_all([existing, req])
+        db.session.commit()
+
+        mock_contract = MagicMock()
+        mock_contract.functions.minter.return_value.call.return_value = "0x" + "3" * 40
+        mock_contract.functions.whitelistedIssuers.return_value.call.return_value = True
+        with patch.object(api_mod, "_require_contract_code", return_value=None), patch.object(
+            api_mod.blockchain_service, "get_w3", return_value=MagicMock()
+        ), patch.object(api_mod.blockchain_service, "get_contract", return_value=mock_contract), patch.object(
+            api_mod.blockchain_service, "minter_account_address", return_value="0x" + "3" * 40
+        ), patch.object(api_mod.blockchain_service, "mint_for_issuer", return_value=(99, "0x" + "9" * 64)), patch.object(
+            api_mod.blockchain_service, "find_minted_token_id_by_cert_id", return_value=None
+        ), patch.object(
+            api_mod.eip712_service, "mint_authorization_full_message", return_value={"message": "test"}
+        ), patch.object(
+            api_mod.eip712_service, "recover_typed_data_signer", return_value=uni.wallet_address
+        ), patch.object(
+            api_mod.eip712_service, "typed_data_signable_hash_hex", return_value="0x" + "b" * 64
+        ):
+            r = self.client.post(
+                "/api/university/certificates/submit-authorization",
+                json={"mint_request_id": req.id, "signature": "0x" + "c" * 130},
+                headers=self._uni_jwt_single_mint(user),
+            )
+
+        self.assertEqual(r.status_code, 500, r.get_data(as_text=True))
+        db.session.refresh(req)
+        db.session.refresh(uni)
+        self.assertEqual(req.status, "minted")
+        self.assertEqual(req.failure_code, "certificate_index_collision")
+        self.assertEqual(req.minter_tx_hash, "0x" + "9" * 64)
+        self.assertEqual(uni.eip712_single_nonce, 1)
+        self._cleanup_mint_fixtures()
+
+    def test_batch_collision_marks_row_minted_before_returning_error(self) -> None:
+        import json
+
+        import app.mint_batch_routes as batch_mod
+
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        batch = MintBatch(
+            university_id=uni.id,
+            status="authorized",
+            original_filename="batch.csv",
+            total_rows=1,
+            valid_rows=1,
+            invalid_rows=0,
+            authorized_signature_hex="0x" + "1" * 130,
+        )
+        db.session.add(batch)
+        db.session.flush()
+        row = MintBatchRow(
+            batch_id=batch.id,
+            row_index=1,
+            cert_id="BATCH-COLLIDE",
+            student_internal_id="IID-B",
+            student_email="batch@example.edu",
+            row_status="prepared",
+            metadata_uri="ipfs://batch",
+            core_hash="0x" + "4" * 64,
+            prepared_at=datetime.utcnow(),
+        )
+        db.session.add(row)
+        db.session.flush()
+        batch.authorized_payload_json = json.dumps(
+            [{"row_id": row.id, "row_index": row.row_index, "cert_id": row.cert_id, "core_hash": row.core_hash}]
+        )
+        db.session.add(
+            CertificateRecord(
+                token_id=77,
+                university_id=uni.id,
+                cert_id="CERT-OTHER-BATCH",
+                ipfs_uri="ipfs://other-batch",
+                core_hash="0x" + "5" * 64,
+                status="issued",
+            )
+        )
+        db.session.commit()
+
+        with patch.object(batch_mod, "_require_contract_code", return_value=None), patch.object(
+            batch_mod.blockchain_service, "get_w3", return_value=MagicMock()
+        ), patch.object(batch_mod.blockchain_service, "get_contract", return_value=MagicMock()), patch.object(
+            batch_mod.blockchain_service, "minter_account_address", return_value="0x" + "3" * 40
+        ), patch.object(batch_mod.blockchain_service, "mint_for_issuer", return_value=(77, "0x" + "7" * 64)), patch.object(
+            batch_mod.blockchain_service, "find_minted_token_id_by_cert_id", return_value=None
+        ), patch.object(
+            batch_mod, "_verify_certificate_mint_receipt", return_value=(True, None)
+        ):
+            r = self.client.post(
+                f"/api/university/mint-batches/{batch.id}/execute",
+                json={"max_mints": 1},
+                headers=self._uni_jwt_single_mint(user),
+            )
+
+        self.assertEqual(r.status_code, 500, r.get_data(as_text=True))
+        db.session.refresh(row)
+        self.assertEqual(row.row_status, "mint_confirmed")
+        self.assertEqual(row.token_id, 77)
+        self.assertEqual(row.tx_hash, "0x" + "7" * 64)
+        self._cleanup_mint_fixtures()
+
+    def test_student_claim_matches_issued_single_mint_record(self) -> None:
+        import app.student_claim_routes as claim_mod
+
+        self._cleanup_mint_fixtures()
+        uni, _ = self._seed_verified_university_single_mint()
+        db.session.add(
+            CertificateRecord(
+                token_id=501,
+                university_id=uni.id,
+                cert_id="CERT-SINGLE-CLAIM",
+                ipfs_uri="ipfs://single-claim",
+                core_hash="0x" + "6" * 64,
+                status="issued",
+                student_internal_id="SID-501",
+                student_email="claimant@example.edu",
+            )
+        )
+        db.session.commit()
+
+        with patch.object(claim_mod.blockchain_service, "escrow_claim_eligibility", return_value=(True, None)):
+            r = self.client.post(
+                "/api/public/student-claim-requests",
+                json={
+                    "university_id": uni.id,
+                    "student_internal_id": "SID-501",
+                    "student_email": "CLAIMANT@EXAMPLE.EDU",
+                    "wallet_address": "0x" + "8" * 40,
+                },
+            )
+
+        self.assertEqual(r.status_code, 201, r.get_data(as_text=True))
+        claim = StudentClaimRequest.query.filter_by(token_id=501).first()
+        self.assertIsNotNone(claim)
+        self.assertIsNone(claim.mint_batch_row_id)
+        self.assertEqual(claim.cert_id, "CERT-SINGLE-CLAIM")
+        self._cleanup_mint_fixtures()
 
 
 if __name__ == "__main__":

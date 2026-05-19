@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from flask import Blueprint, abort, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
@@ -10,7 +11,7 @@ from sqlalchemy import func
 from web3 import Web3
 
 from app.extensions import db
-from app.models import MintBatch, MintBatchRow, StudentClaimRequest, University, User
+from app.models import CertificateRecord, MintBatch, MintBatchRow, StudentClaimRequest, University, User
 from app.services import blockchain_service, notification_service
 from app.university_freeze import freeze_guard_response
 
@@ -75,6 +76,27 @@ def _find_mint_row_for_student(*, university_id: int, student_internal_id: str, 
     return rows[0] if rows else None
 
 
+def _find_certificate_record_for_student(
+    *, university_id: int, student_internal_id: str, email: str
+) -> CertificateRecord | None:
+    sid = student_internal_id.strip()
+    em = email.strip().lower()
+    if not sid or not em:
+        return None
+    q = (
+        CertificateRecord.query.filter(CertificateRecord.university_id == int(university_id))
+        .filter(CertificateRecord.token_id.isnot(None))
+        .filter(CertificateRecord.student_internal_id.isnot(None))
+        .filter(CertificateRecord.student_email.isnot(None))
+        .filter(func.lower(func.trim(CertificateRecord.student_email)) == em)
+        .filter(func.trim(CertificateRecord.student_internal_id) == sid)
+        .filter(func.lower(func.trim(CertificateRecord.status)) == "issued")
+        .order_by(CertificateRecord.id.desc())
+    )
+    records = q.all()
+    return records[0] if records else None
+
+
 def register_student_claim_routes(bp: Blueprint) -> None:
     @bp.post("/public/student-claim-requests")
     def public_create_student_claim_request():
@@ -104,18 +126,25 @@ def register_student_claim_routes(bp: Blueprint) -> None:
             student_internal_id=student_internal_id,
             email=student_email,
         )
+        cert_record = None
         if not row or row.token_id is None:
+            cert_record = _find_certificate_record_for_student(
+                university_id=university_id,
+                student_internal_id=student_internal_id,
+                email=student_email,
+            )
+        if (not row or row.token_id is None) and (not cert_record or cert_record.token_id is None):
             return (
                 {
                     "error": (
                         "No minted credential matched that institution, student ID, and email. "
-                        "Use the same values your school has on file for your batch upload."
+                        "Use the same values your school has on file for your credential."
                     )
                 },
                 404,
             )
 
-        tid = int(row.token_id)
+        tid = int(row.token_id if row and row.token_id is not None else cert_record.token_id)
         ok_chain, chain_err = blockchain_service.escrow_claim_eligibility(
             token_id=tid, issuer_wallet=uni.wallet_address
         )
@@ -132,9 +161,9 @@ def register_student_claim_routes(bp: Blueprint) -> None:
 
         rec = StudentClaimRequest(
             university_id=university_id,
-            mint_batch_row_id=row.id,
+            mint_batch_row_id=row.id if row else None,
             token_id=tid,
-            cert_id=(row.cert_id or "").strip() or None,
+            cert_id=((row.cert_id if row else cert_record.cert_id) or "").strip() or None,
             student_internal_id=student_internal_id.strip(),
             student_email=student_email.strip().lower(),
             wallet_address=wallet,

@@ -1013,6 +1013,56 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
 
             try:
                 token_id_int = int(token_id)
+
+                def _commit_row_after_index_collision(existing: CertificateRecord):
+                    nonlocal processed
+                    h = tx_hex if tx_hex.startswith("0x") else "0x" + tx_hex
+                    row.tx_hash = h
+                    row.token_id = token_id_int
+                    row.minted_at = datetime.utcnow()
+                    row.row_status = "mint_confirmed"
+                    row.error_message = "Mint succeeded on-chain, but the local certificate index has a token_id collision."
+                    row.prepare_to_mint_ms = (
+                        max(0, int((row.minted_at - prep_at_snapshot).total_seconds() * 1000))
+                        if prep_at_snapshot
+                        else None
+                    )
+                    row.platform_mint_ms = int((time.perf_counter() - chain_t0) * 1000)
+                    minted_out.append(
+                        {
+                            "row_id": row.id,
+                            "token_id": token_id_int,
+                            "tx_hash": h,
+                            "timing": {
+                                "prepare_to_mint_ms": row.prepare_to_mint_ms,
+                                "platform_mint_ms": row.platform_mint_ms,
+                            },
+                        }
+                    )
+                    processed += 1
+                    b.status = "executing" if b.status == "authorized" else b.status
+                    b.updated_at = datetime.utcnow()
+                    chunk_wall_ms = _apply_execute_chunk_timing()
+                    db.session.commit()
+                    return (
+                        jsonify(
+                            {
+                                "error": (
+                                    "Mint succeeded on-chain, but the local certificate index has a token_id collision. "
+                                    "The row was marked minted to prevent replay; resolve the DB index before retrying."
+                                ),
+                                "partial": minted_out,
+                                "timing": {"chunk_wall_ms": chunk_wall_ms},
+                                "collision": {
+                                    "token_id": token_id_int,
+                                    "existing_cert_id": existing.cert_id,
+                                    "existing_status": existing.status,
+                                },
+                            }
+                        ),
+                        500,
+                    )
+
                 rec = CertificateRecord.query.filter_by(cert_id=row.cert_id).first() if row.cert_id else None
                 if not rec:
                     # Collision check must also run for brand-new records, otherwise INSERT can violate UNIQUE(token_id).
@@ -1037,22 +1087,7 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                                 else:
                                     other_tid = None
                             if not other_tid:
-                                return (
-                                    jsonify(
-                                        {
-                                            "error": (
-                                                "Certificate index collision on token_id; another certificate record already "
-                                                "claims this token id. Resolve in DB or rebuild the index."
-                                            ),
-                                            "collision": {
-                                                "token_id": token_id_int,
-                                                "existing_cert_id": existing.cert_id,
-                                                "existing_status": existing.status,
-                                            },
-                                        }
-                                    ),
-                                    500,
-                                )
+                                return _commit_row_after_index_collision(existing)
                     rec = CertificateRecord(
                         token_id=token_id_int,
                         university_id=uni.id,
@@ -1082,22 +1117,7 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                                     db.session.flush()
                                     other_tid = None
                             if other_tid and other_tid.id != rec.id:
-                                return (
-                                    jsonify(
-                                        {
-                                            "error": (
-                                                "Certificate index collision on token_id; another certificate record already "
-                                                "claims this token id. Resolve in DB or rebuild the index."
-                                            ),
-                                            "collision": {
-                                                "token_id": token_id_int,
-                                                "existing_cert_id": other_tid.cert_id,
-                                                "existing_status": other_tid.status,
-                                            },
-                                        }
-                                    ),
-                                    500,
-                                )
+                                return _commit_row_after_index_collision(other_tid)
                     rec.token_id = token_id_int
                     rec.ipfs_uri = row.metadata_uri or rec.ipfs_uri
                     rec.core_hash = row.core_hash or rec.core_hash

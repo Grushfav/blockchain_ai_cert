@@ -1331,6 +1331,41 @@ def submit_mint_authorization():
     # Token ids are sequential; other mints can interleave between prepare and submit.
     # The authorization commitment does not include token_id, so accept the minted token id and reconcile the DB index.
     token_id_int = int(token_id)
+
+    def _commit_consumed_after_index_collision(existing: CertificateRecord):
+        req.status = "minted"
+        req.failure_code = "certificate_index_collision"
+        req.signature_hex = signature
+        req.digest_hex = digest
+        req.minter_tx_hash = tx_hex
+        uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
+        sync_uni_eip712_watermark(uni)
+        req.completed_at = datetime.utcnow()
+        req.prepare_to_complete_ms = (
+            max(0, int((req.completed_at - req.created_at).total_seconds() * 1000)) if req.created_at else None
+        )
+        req.platform_mint_ms = int((time.perf_counter() - chain_t0) * 1000)
+        db.session.commit()
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "Mint succeeded on-chain, but the local certificate index has a token_id collision. "
+                        "The authorization was consumed to prevent replay; resolve the DB index before retrying."
+                    ),
+                    "token_id": token_id_int,
+                    "tx_hash": tx_hex,
+                    "mint_request_id": mint_request_id,
+                    "collision": {
+                        "token_id": token_id_int,
+                        "existing_cert_id": existing.cert_id,
+                        "existing_status": existing.status,
+                    },
+                }
+            ),
+            500,
+        )
+
     rec = CertificateRecord.query.filter_by(cert_id=req.cert_id).first()
     if not rec:
         existing = CertificateRecord.query.filter_by(token_id=token_id_int).first()
@@ -1351,22 +1386,7 @@ def submit_mint_authorization():
                         db.session.flush()
                         existing = None
                 if existing:
-                    return (
-                        jsonify(
-                            {
-                                "error": (
-                                    "Certificate index collision on token_id; another certificate record already "
-                                    "claims this token id. Resolve in DB or rebuild the index."
-                                ),
-                                "collision": {
-                                    "token_id": token_id_int,
-                                    "existing_cert_id": existing.cert_id,
-                                    "existing_status": existing.status,
-                                },
-                            }
-                        ),
-                        500,
-                    )
+                    return _commit_consumed_after_index_collision(existing)
         rec = CertificateRecord(
             token_id=token_id_int,
             university_id=uni.id,
@@ -1399,22 +1419,7 @@ def submit_mint_authorization():
                         db.session.flush()
                         other_tid = None
                 if other_tid and other_tid.id != rec.id:
-                    return (
-                        jsonify(
-                            {
-                                "error": (
-                                    "Certificate index collision on token_id; another certificate record already "
-                                    "claims this token id. Resolve in DB or rebuild the index."
-                                ),
-                                "collision": {
-                                    "token_id": token_id_int,
-                                    "existing_cert_id": other_tid.cert_id,
-                                    "existing_status": other_tid.status,
-                                },
-                            }
-                        ),
-                        500,
-                    )
+                    return _commit_consumed_after_index_collision(other_tid)
         rec.token_id = token_id_int
         rec.ipfs_uri = mint_uri
         rec.core_hash = req.core_hash
