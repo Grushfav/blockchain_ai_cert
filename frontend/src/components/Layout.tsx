@@ -32,6 +32,10 @@ function sidebarNavClass(active: boolean) {
   return `app-sidebar__link${active ? " app-sidebar__link--active" : ""}`;
 }
 
+function onboardingNavClass(active: boolean) {
+  return `app-sidebar__link app-sidebar__link--onboarding${active ? " app-sidebar__link--onboarding-active" : ""}`;
+}
+
 export function Layout() {
   const { token, role, logout } = useAuth();
   const loc = useLocation();
@@ -334,7 +338,7 @@ export function Layout() {
                 <li>
                   <NavLink
                     to="/onboarding"
-                    className={({ isActive }) => sidebarNavClass(isActive)}
+                    className={({ isActive }) => onboardingNavClass(isActive)}
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>
@@ -485,7 +489,7 @@ export function Layout() {
                 <li>
                   <NavLink
                     to="/onboarding"
-                    className={({ isActive }) => sidebarNavClass(isActive)}
+                    className={({ isActive }) => onboardingNavClass(isActive)}
                     onClick={() => setSidebarOpen(false)}
                   >
                     <span className="app-sidebar__icon" aria-hidden>

@@ -258,6 +258,33 @@ body {
   opacity: 1;
 }
 
+/* Onboarding — gold accent in sidebar (capstone demo guide) */
+.app-sidebar__link--onboarding {
+  color: #e8c547;
+}
+
+.app-sidebar__link--onboarding:hover {
+  color: #f5d76a;
+  background: rgba(232, 197, 71, 0.12);
+}
+
+.app-sidebar__link--onboarding .app-sidebar__icon {
+  color: #f5c842;
+  opacity: 1;
+}
+
+.app-sidebar__link--onboarding-active,
+.app-sidebar__link--onboarding.app-sidebar__link--onboarding-active {
+  color: #ffe08a;
+  background: rgba(232, 197, 71, 0.16);
+  box-shadow: inset 3px 0 0 #e8c547;
+}
+
+.app-sidebar__link--onboarding-active .app-sidebar__icon,
+.app-sidebar__link--onboarding.app-sidebar__link--onboarding-active .app-sidebar__icon {
+  color: #ffe08a;
+}
+
 .app-sidebar__footer {
   padding: 1rem 0.85rem 1.25rem;
   border-top: 1px solid rgba(58, 74, 110, 0.35);
