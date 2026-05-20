@@ -7896,3 +7896,90 @@ button.btn-secondary:disabled:has(.busy-label) .loading-spinner {
 .home-mock-cta-link--secondary:hover {
   background: rgba(79, 140, 255, 0.1);
 }
+
+/* LINKS */
+.onboarding-step a,
+.onboarding-step__content a {
+    color: #e2e8f0;
+    text-decoration: none;
+    font-weight: 500;
+    transition: all 0.25s ease;
+    border-bottom: 1px solid rgba(255,255,255,0.15);
+    padding-bottom: 2px;
+}
+
+.onboarding-step a:hover,
+.onboarding-step__content a:hover {
+    color: #7dd3fc;
+    border-color: #38bdf8;
+    text-shadow: 0 0 10px rgba(56,189,248,0.45);
+}
+
+.onboarding-step__figure {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 20px;
+    overflow: hidden;
+    padding: 0.75rem;
+    box-shadow:
+      0 10px 40px rgba(0,0,0,0.35);
+}
+
+.onboarding-step__img {
+    border-radius: 14px;
+}
+
+.onboarding-step__footer .btn-primary,
+.onboarding-step__footer .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    padding: 0.8rem 1.25rem;
+    min-height: 42px;
+
+    border-radius: 14px;
+    border: none;
+
+    font-size: 0.92rem;
+    font-weight: 700;
+    line-height: 1;
+
+    text-decoration: none;
+
+    transition: all 0.2s ease;
+}
+
+/* BLUE BUTTON */
+.onboarding-step__footer .btn-primary {
+    background: linear-gradient(
+        180deg,
+        #4f8cff,
+        #3b82f6
+    );
+
+    color: white;
+
+    box-shadow:
+        0 6px 18px rgba(59,130,246,0.28);
+}
+
+/* GRAY BUTTON */
+.onboarding-step__footer .btn-secondary {
+    background: linear-gradient(
+        180deg,
+        #5b6478,
+        #475066
+    );
+
+    color: white;
+
+    box-shadow:
+        0 6px 18px rgba(15,23,42,0.25);
+}
+
+/* HOVER */
+.onboarding-step__footer .btn-primary:hover,
+.onboarding-step__footer .btn-secondary:hover {
+    transform: translateY(-1px);
+}

@@ -2,6 +2,24 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { BusyLabel } from "../components/LoadingSpinner";
 import { apiFormData } from "../api/client";
+import {
+  Building2,
+  BadgeInfo,
+  Globe,
+  Mail,
+  Lock,
+  Wallet,
+  Phone,
+  Link2,
+  Scale,
+  CalendarDays,
+  Pencil,
+  Clock3,
+  Earth,
+  Paperclip,
+  FileText,
+  Hash,
+} from "lucide-react";
 
 const DOC_LABELS = ["Accreditation", "Authorization letter", "Other"] as const;
 
@@ -222,7 +240,7 @@ export function RegisterPage() {
                 <label htmlFor="name">Institution name</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    🏛
+                    <Building2 size={18} />
                   </span>
                   <input id="name" value={name} onChange={(e) => setName(e.target.value)} required autoComplete="organization" />
                 </div>
@@ -231,7 +249,7 @@ export function RegisterPage() {
                 <label htmlFor="internal_id">Internal ID (your reference number)</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    🏷
+                    <BadgeInfo size={18} />
                   </span>
                   <input
                     id="internal_id"
@@ -246,7 +264,7 @@ export function RegisterPage() {
                 <label htmlFor="domain_email">Email domain (e.g. uwimona.edu.jm)</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    🌐
+                    <Globe size={18} />
                   </span>
                   <input
                     id="domain_email"
@@ -262,7 +280,7 @@ export function RegisterPage() {
                 <label htmlFor="contact_email">Contact email (login)</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    ✉
+                    <Mail size={18} />
                   </span>
                   <input
                     id="contact_email"
@@ -278,7 +296,7 @@ export function RegisterPage() {
                 <label htmlFor="password">Password</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    ▣
+                    <Lock size={18} />
                   </span>
                   <input
                     id="password"
@@ -295,7 +313,7 @@ export function RegisterPage() {
                 <label htmlFor="issuer_wallet">Issuer wallet address (0x…)</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    ⧉
+                    <Wallet size={18} />
                   </span>
                   <input
                     id="issuer_wallet"
@@ -326,7 +344,7 @@ export function RegisterPage() {
                   <label htmlFor="inst_email">Institution contact email</label>
                   <div className="inst-input-wrap">
                     <span className="inst-input-icon" aria-hidden>
-                      ✉
+                      <Mail size={18} />
                     </span>
                     <input
                       id="inst_email"
@@ -341,7 +359,7 @@ export function RegisterPage() {
                   <label htmlFor="inst_phone">Institution contact phone</label>
                   <div className="inst-input-wrap">
                     <span className="inst-input-icon" aria-hidden>
-                      ☎
+                      <Phone size={18} />
                     </span>
                     <input
                       id="inst_phone"
@@ -356,7 +374,7 @@ export function RegisterPage() {
                 <label htmlFor="inst_web">Institution website (https://…)</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    🔗
+                    <Link2 size={18} />
                   </span>
                   <input
                     id="inst_web"
@@ -372,7 +390,7 @@ export function RegisterPage() {
                   <label htmlFor="inst_lic">Institution license ID</label>
                   <div className="inst-input-wrap">
                     <span className="inst-input-icon" aria-hidden>
-                      ▣
+                      <Lock size={18} />
                     </span>
                     <input id="inst_lic" value={institutionLicenseId} onChange={(e) => setInstitutionLicenseId(e.target.value)} required />
                   </div>
@@ -381,7 +399,7 @@ export function RegisterPage() {
                   <label htmlFor="inst_auth">License authority</label>
                   <div className="inst-input-wrap">
                     <span className="inst-input-icon" aria-hidden>
-                      ⚖
+                      <Scale size={18} />
                     </span>
                     <input
                       id="inst_auth"
@@ -396,7 +414,7 @@ export function RegisterPage() {
                 <label htmlFor="inst_valid">License valid until (YYYY-MM-DD)</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    📅
+                    <CalendarDays size={18} />
                   </span>
                   <input
                     id="inst_valid"
@@ -411,7 +429,7 @@ export function RegisterPage() {
                 <label htmlFor="kyc">KYC / notes (optional)</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    ✎
+                    <Pencil size={18} />
                   </span>
                   <textarea id="kyc" rows={3} value={kycNotes} onChange={(e) => setKycNotes(e.target.value)} />
                 </div>
@@ -478,7 +496,7 @@ export function RegisterPage() {
                   <label htmlFor="op_s">Operating hours start (24h, optional)</label>
                   <div className="inst-input-wrap">
                     <span className="inst-input-icon" aria-hidden>
-                      🕐
+                      <Clock3 size={18} />
                     </span>
                     <input id="op_s" type="time" value={opStart} onChange={(e) => setOpStart(e.target.value)} />
                   </div>
@@ -487,7 +505,7 @@ export function RegisterPage() {
                   <label htmlFor="op_e">Operating hours end (24h, optional)</label>
                   <div className="inst-input-wrap">
                     <span className="inst-input-icon" aria-hidden>
-                      🕐
+                      <Clock3 size={18} />
                     </span>
                     <input id="op_e" type="time" value={opEnd} onChange={(e) => setOpEnd(e.target.value)} />
                   </div>
@@ -497,7 +515,7 @@ export function RegisterPage() {
                 <label htmlFor="op_tz">Operating timezone (IANA)</label>
                 <div className="inst-input-wrap">
                   <span className="inst-input-icon" aria-hidden>
-                    🌍
+                    <Earth size={18} />
                   </span>
                   <input
                     id="op_tz"
@@ -528,7 +546,7 @@ export function RegisterPage() {
                       <label htmlFor={`doc_f_${idx}`}>File {idx + 1}</label>
                       <div className="inst-input-wrap">
                         <span className="inst-input-icon" aria-hidden>
-                          📎
+                          <Paperclip size={18} />
                         </span>
                         <input
                           id={`doc_f_${idx}`}
@@ -545,7 +563,7 @@ export function RegisterPage() {
                       <label htmlFor={`doc_l_${idx}`}>Document type</label>
                       <div className="inst-input-wrap">
                         <span className="inst-input-icon" aria-hidden>
-                          📄
+                          <FileText size={18} />
                         </span>
                         <select
                           id={`doc_l_${idx}`}
