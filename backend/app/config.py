@@ -20,9 +20,26 @@ def _env(primary: str, legacy: str = "") -> str:
     return (os.environ.get(legacy) or "").strip() if legacy else ""
 
 
+def _normalize_database_url(raw: str) -> str:
+    """Use psycopg v3 (requirements.txt); Neon often gives postgresql:// which defaults to psycopg2."""
+    url = (raw or "").strip()
+    if not url:
+        return url
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url[len("postgres://") :]
+    if url.startswith("postgresql+psycopg2://"):
+        return "postgresql+psycopg://" + url[len("postgresql+psycopg2://") :]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url[len("postgresql://") :]
+    return url
+
+
 class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY") or "dev-change-me"
-    SQLALCHEMY_DATABASE_URI = os.environ.get("DATABASE_URL") or _default_sqlite_uri()
+    _database_url = (os.environ.get("DATABASE_URL") or "").strip()
+    SQLALCHEMY_DATABASE_URI = (
+        _normalize_database_url(_database_url) if _database_url else _default_sqlite_uri()
+    )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY") or SECRET_KEY
     JWT_ACCESS_TOKEN_EXPIRES = False
