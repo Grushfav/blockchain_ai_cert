@@ -285,6 +285,37 @@ body {
   color: #ffe08a;
 }
 
+.app-sidebar__label-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.app-sidebar__onboarding-tag {
+  display: inline-block;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: #1a1408;
+  background: linear-gradient(135deg, #f5d76a, #e8c547);
+  border: 1px solid rgba(255, 224, 138, 0.45);
+  line-height: 1.2;
+}
+
+.app-sidebar__link--onboarding:hover .app-sidebar__onboarding-tag {
+  background: linear-gradient(135deg, #ffe08a, #f5d76a);
+}
+
+.app-sidebar__link--onboarding-active .app-sidebar__onboarding-tag {
+  color: #1a1408;
+  background: #ffe08a;
+}
+
 .app-sidebar__footer {
   padding: 1rem 0.85rem 1.25rem;
   border-top: 1px solid rgba(58, 74, 110, 0.35);

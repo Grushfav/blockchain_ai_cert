@@ -317,6 +317,21 @@ export function Layout() {
 
         <nav className="app-sidebar__nav" aria-label="Primary">
           <ul className="app-sidebar__list">
+            <li>
+              <NavLink
+                to="/onboarding"
+                className={({ isActive }) => onboardingNavClass(isActive)}
+                onClick={() => setSidebarOpen(false)}
+              >
+                <span className="app-sidebar__icon" aria-hidden>
+                  <ListChecks />
+                </span>
+                <span className="app-sidebar__label-group">
+                  <span className="app-sidebar__label">Onboarding</span>
+                  <span className="app-sidebar__onboarding-tag">New users</span>
+                </span>
+              </NavLink>
+            </li>
             {role !== "admin" && (
               <>
                 <li>
@@ -333,18 +348,6 @@ export function Layout() {
                       <BadgeCheck />
                     </span>
                     <span className="app-sidebar__label">Claim</span>
-                  </NavLink>
-                </li>
-                <li>
-                  <NavLink
-                    to="/onboarding"
-                    className={({ isActive }) => onboardingNavClass(isActive)}
-                    onClick={() => setSidebarOpen(false)}
-                  >
-                    <span className="app-sidebar__icon" aria-hidden>
-                      <ListChecks />
-                    </span>
-                    <span className="app-sidebar__label">Onboarding</span>
                   </NavLink>
                 </li>
               </>
@@ -484,18 +487,6 @@ export function Layout() {
                       <ShieldAlert />
                     </span>
                     <span className="app-sidebar__label">Risk</span>
-                  </NavLink>
-                </li>
-                <li>
-                  <NavLink
-                    to="/onboarding"
-                    className={({ isActive }) => onboardingNavClass(isActive)}
-                    onClick={() => setSidebarOpen(false)}
-                  >
-                    <span className="app-sidebar__icon" aria-hidden>
-                      <ListChecks />
-                    </span>
-                    <span className="app-sidebar__label">Onboarding</span>
                   </NavLink>
                 </li>
               </>
