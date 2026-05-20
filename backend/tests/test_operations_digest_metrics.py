@@ -7,7 +7,14 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    StudentClaimRequest,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -152,6 +159,7 @@ class OperationsDigestMetricsTests(unittest.TestCase):
     # --- Single-mint HTTPS metadata (same app/db lifecycle as class; must run before tearDownClass drop_all) ---
 
     def _cleanup_mint_fixtures(self) -> None:
+        StudentClaimRequest.query.delete()
         MintAuthorizationRequest.query.delete()
         CertificateRecord.query.delete()
         User.query.filter(User.email == "singlemint@example.edu").delete(synchronize_session=False)
@@ -217,6 +225,59 @@ class OperationsDigestMetricsTests(unittest.TestCase):
         self.assertEqual(r.status_code, 400)
         self.assertIn("email", (r.get_json() or {}).get("error", "").lower())
         self._cleanup_mint_fixtures()
+
+    def test_student_claim_request_accepts_single_mint_certificate(self) -> None:
+        self._cleanup_mint_fixtures()
+        uni, _ = self._seed_verified_university_single_mint()
+        db.session.add(
+            CertificateRecord(
+                token_id=4242,
+                university_id=uni.id,
+                cert_id="CERT-SM-CLAIM",
+                ipfs_uri="ipfs://QmSingleMintClaim",
+                status="issued",
+                student_internal_id="STU-4242",
+                student_email="student@example.edu",
+            )
+        )
+        db.session.commit()
+
+        from app import student_claim_routes as claim_mod
+
+        try:
+            with patch.object(
+                claim_mod.blockchain_service,
+                "escrow_claim_eligibility",
+                return_value=(True, None),
+            ) as mock_eligibility:
+                with patch.object(
+                    claim_mod.notification_service,
+                    "notify_university_users",
+                    return_value=0,
+                ):
+                    r = self.client.post(
+                        "/api/public/student-claim-requests",
+                        json={
+                            "university_id": uni.id,
+                            "student_internal_id": "STU-4242",
+                            "student_email": "Student@Example.edu",
+                            "wallet_address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                        },
+                    )
+
+            self.assertEqual(r.status_code, 201, r.get_data(as_text=True))
+            self.assertEqual(r.get_json().get("token_id"), 4242)
+            mock_eligibility.assert_called_once_with(
+                token_id=4242,
+                issuer_wallet=uni.wallet_address,
+            )
+            req = StudentClaimRequest.query.filter_by(token_id=4242).one()
+            self.assertIsNone(req.mint_batch_row_id)
+            self.assertEqual(req.cert_id, "CERT-SM-CLAIM")
+            self.assertEqual(req.student_email, "student@example.edu")
+            self.assertEqual(req.wallet_address, "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC")
+        finally:
+            self._cleanup_mint_fixtures()
 
     def test_prepare_single_mint_pins_ipfs_metadata(self) -> None:
         import json
