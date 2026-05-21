@@ -3,10 +3,12 @@
 import unittest
 from unittest.mock import patch
 
-from app import create_app
+from flask import Blueprint, Flask
+
 from app.config import Config
-from app.extensions import db
+from app.extensions import db, jwt
 from app.models import CertificateRecord, StudentClaimRequest, University
+from app.student_claim_routes import register_student_claim_routes
 
 
 class MemConfig(Config):
@@ -16,9 +18,16 @@ class MemConfig(Config):
 
 class StudentClaimRequestTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.app = create_app(MemConfig)
+        self.app = Flask(__name__)
+        self.app.config.from_object(MemConfig)
+        db.init_app(self.app)
+        jwt.init_app(self.app)
+        bp = Blueprint("student_claim_test_api", __name__, url_prefix="/api")
+        register_student_claim_routes(bp)
+        self.app.register_blueprint(bp)
         self.ctx = self.app.app_context()
         self.ctx.push()
+        db.create_all()
         self.client = self.app.test_client()
 
     def tearDown(self) -> None:
