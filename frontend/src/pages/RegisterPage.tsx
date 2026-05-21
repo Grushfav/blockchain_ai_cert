@@ -18,7 +18,6 @@ import {
   Earth,
   Paperclip,
   FileText,
-  Hash,
 } from "lucide-react";
 
 const DOC_LABELS = ["Accreditation", "Authorization letter", "Other"] as const;
