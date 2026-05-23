@@ -347,6 +347,18 @@ Production: `npm run build` → `frontend/dist/`.
 
 Field verification recomputes the canonical core hash, looks up indexed records (`cert_id/core_hash/token_id`), then confirms chain status.
 
+
+## Security notes
+
+- Never commit real keys. Use Amoy-only keys and rotated secrets.
+- University private keys are never accepted or stored by backend.
+- `TRUECERT_MINTER_PRIVATE_KEY` is a **hot wallet** with on-chain mint power (within `mintForIssuer` rules). Protect like a signing key; prefer KMS in production. Fund it only with test MATIC.
+- Batch flow **increments `eip712_nonce` on `submit-authorization`**. If `execute` fails mid-batch, you may need a fresh CSV batch or manual DB help — design assumes execute is retried until rows complete.
+- `CONTRACT_OWNER_PRIVATE_KEY` is for platform admin chain actions (whitelist + `setMinter`), not university issuance.
+- Rotate leaked DB/API credentials and keep `.env` local only.
+
+## License
+
 ## Related use cases (same trust model)
 
 TrueCert implements **academic credentials** only. The same **on-chain anchor + IPFS metadata + issuer signature** pattern applies to other domains where a **trusted organization** attests a record and **third parties** must verify it without private database access.
@@ -383,26 +395,5 @@ TrueCert implements **academic credentials** only. The same **on-chain anchor + 
 - **IPFS:** permit PDF, conditions, reference numbers  
 - **Verifier:** banks, border agencies, contractors  
 
-
-## Institution logo support
-
-- Upload logo from university portal (`POST /api/university/logo`, max 2MB image).
-- Returned/stored as `logo_uri` (`ipfs://...`) and exposed as `logo_url` in `/api/university/me`.
-- Mint metadata includes `institution_logo`.
-
-## Demo seed script
-
-`backend/seed_demo_university.py` creates a demo university with a **random issuer address** stored in the DB. It prints a **one-time private key to the terminal** so you can import that account into MetaMask locally — that key is **not** stored by the backend.
-
-## Security notes
-
-- Never commit real keys. Use Amoy-only keys and rotated secrets.
-- University private keys are never accepted or stored by backend.
-- `TRUECERT_MINTER_PRIVATE_KEY` is a **hot wallet** with on-chain mint power (within `mintForIssuer` rules). Protect like a signing key; prefer KMS in production. Fund it only with test MATIC.
-- Batch flow **increments `eip712_nonce` on `submit-authorization`**. If `execute` fails mid-batch, you may need a fresh CSV batch or manual DB help — design assumes execute is retried until rows complete.
-- `CONTRACT_OWNER_PRIVATE_KEY` is for platform admin chain actions (whitelist + `setMinter`), not university issuance.
-- Rotate leaked DB/API credentials and keep `.env` local only.
-
-## License
 
 MIT (capstone / educational use).

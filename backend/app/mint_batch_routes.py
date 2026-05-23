@@ -760,15 +760,15 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         nonce = int(uni.eip712_batch_nonce or 0)
         expiry = eip712_service.default_expiry_unix()
         payload: list[dict[str, Any]] = []
-        token_cursor = next_token_id_base
+        token_nex = next_token_id_base
         for r in pending:
             rec = CertificateRecord.query.filter_by(cert_id=r.cert_id).first() if r.cert_id else None
             if not rec:
                 # Allocate a fresh token id, avoiding collisions in the local index.
-                while CertificateRecord.query.filter_by(token_id=token_cursor).first() is not None:
-                    token_cursor += 1
+                while CertificateRecord.query.filter_by(token_id=token_nex).first() is not None:
+                    token_nex += 1
                 rec = CertificateRecord(
-                    token_id=int(token_cursor),
+                    token_id=int(token_nex),
                     university_id=uni.id,
                     cert_id=r.cert_id,
                     ipfs_uri=r.metadata_uri or "",
@@ -777,7 +777,7 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 )
                 db.session.add(rec)
                 db.session.flush()
-                token_cursor += 1
+                token_nex += 1
             payload.append(
                 {
                     "row_id": r.id,
