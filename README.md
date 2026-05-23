@@ -1,6 +1,16 @@
 # TrueCert (COMP 3901 capstone)
+## Team Members
+- Gavin Seaton 
+- Samantha Samuels 
+- Shantay Kellyman
+### Project Supervisor
+- Prof. Daniel N. Coore
+## Project Scope
+Blockchain-based academic credential verification on **Polygon Amoy** with **Flask + Serverless Database**, **Interplanetary File System (IPFS)**, and a **React university portal**. **Blockchain mints that ** use a platform **minter hot wallet** (`mintForIssuer`) after the university signs an **EIP-712 authorization**. The NFT token lifecycle are **Claim / revoke / burn / reissue** remain **issuer wallet** transactions in MetaMask.
+## Goal
+Build a verifiable, tamper-proof credential system in which institutions issue certifications that anyone can validate against on-chain anchors and signed off-chain metadata.
 
-Blockchain-based academic credential verification on **Polygon Amoy** with **Flask + SQLAlchemy**, **IPFS (Pinata)**, and a **React university portal**. **Mints** use a platform **minter hot wallet** (`mintForIssuer`) after the university signs an **EIP-712 authorization** (gasless). **Claim / revoke / burn / reissue** remain **issuer wallet** transactions in MetaMask.
+
 
 ## Repository layout
 
@@ -149,17 +159,6 @@ pip install -r requirements.txt
 python run.py
 ```
 
-API base URL: `http://127.0.0.1:5000/api/`.
-
-### Public trust endpoints (no JWT)
-
-Used by the pre-login **home** page so contract address, chain id, and Ed25519 verification keys stay aligned with `.env` without rebuilding the frontend.
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET | `/api/public/config` | `chain_id`, `network_name`, checksum `contract_address`, Amoy Polygonscan `contract_explorer_url`, `platform_minter_address` (if `TRUECERT_MINTER_PRIVATE_KEY` set), `eip712_domain`, `pinata_gateway_base`, optional `active_signing_kid`, `truecert_public_keys` (`kid`, `public_key_base64`, `public_key_hex`), `updated_at` |
-| GET | `/api/public/verified-universities` | `{ universities: [{ name, internal_id, logo_url }] }` — **`status=verified` only** (no pending registrations) |
-
 **Frontend:** `/` loads the marketing/trust landing page; `/verify` is the public verification UI. Optional `VITE_REPO_URL` in `frontend/.env` adds a repository link in the home footer. Static batch sample: `frontend/public/samples/batch-mint-example.csv` (also mirrored under repo `samples/`).
 
 ### Required backend env vars
@@ -172,7 +171,7 @@ Used by the pre-login **home** page so contract address, chain id, and Ed25519 v
 - `TRUECERT_SIG_KID`
 - `TRUECERT_SIG_PRIVATE_KEY` (Ed25519 private key bytes, hex or base64)
 - `TRUECERT_SIG_PUBLIC_KEYS` (JSON map: `{"kid":"hex-or-base64-pubkey"}`)
-- `PUBLIC_METADATA_BASE_URL` — **optional** for new single mints. Single mint `tokenURI` is now **`ipfs://…`** (Pinata `pinJSONToIPFS`, same as batch). Keep this set if you need **`/api/public/metadata/<token_id>`** for **legacy** HTTPS tokenURIs or for `submit-authorization` to realign old pending requests. Absolute API base, **no** trailing slash (e.g. `https://api.example.com`). **Alias:** `PUBLIC_METADATA_BASE_URI`. **Local dev:** e.g. `http://127.0.0.1:5000`, or infer from request host on localhost when unset.
+- `PUBLIC_METADATA_BASE_URL` — **optional** for new single mints. Single mint `tokenURI` is now **`ipfs://…`** (Pinata `pinJSONToIPFS`, same as batch). Keep this set if you need **`/api/public/metadata/<token_id>`**
 - `TRUECERT_MINTER_PRIVATE_KEY` — **platform** EVM key allowed by `TrueCert.minter`; submits `mintForIssuer` (fund with Amoy MATIC for gas). Prefer KMS / HSM in production; env var is fine for the capstone.
 - `EIP712_DOMAIN_NAME` (default `TrueCert`), `EIP712_DOMAIN_VERSION` (default `1`), `EIP712_CHAIN_ID` (default `80002`)
 - Optional `EIP712_VERIFYING_CONTRACT` — defaults to `TRUECERT_CONTRACT_ADDRESS` for the typed-data domain
@@ -187,11 +186,10 @@ Used by the pre-login **home** page so contract address, chain id, and Ed25519 v
 
 **Privacy:** Third-party LLMs process whatever text you send. Do **not** paste private keys, student or staff email addresses, government IDs, or other sensitive PII into prompts unless you have an explicit policy covering Google’s processing. TrueCert does **not** send student or certificate payloads to Gemini automatically; only `POST /api/admin/ai/gemini-test` forwards the `prompt` JSON field you provide.
 
-After deploy, **contract owner** must call `setMinter(<platform_wallet>)` (see `scripts/deploy.js` + `TRUECERT_MINTER_ADDRESS`, or set manually). The minter address must match the account derived from `TRUECERT_MINTER_PRIVATE_KEY`.
 
 ### Database
 
-- Use Neon Postgres via `DATABASE_URL`:
+- Current system is using Neon Postgres via `DATABASE_URL`:
   - `postgresql+psycopg://<user>:<password>@<host>/<db>?sslmode=require`
 - If `DATABASE_URL` is missing, backend falls back to local SQLite (`backend/instance/truecert.db`).
 - Rotate any leaked credentials and keep `.env` local only.
@@ -213,10 +211,8 @@ You can set these at registration time or later with `PUT /api/university/profil
 
 ### Admin
 
-If `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` are set, first startup creates an admin.  
-`POST /api/auth/login` → `POST /api/admin/universities/<id>/approve` whitelists the registered wallet on-chain and marks the university **verified**.
+Monitor system activites and approves(Whitelist) instition to be able to mint certificates.
 
-**Gemini smoke test (optional):** With `GEMINI_API_KEY` set, `POST /api/admin/ai/gemini-test` and body `{"prompt":"..."}` returns `{"model":"...","text":"..."}`. Prompts over 2,000 characters are rejected (**400**). Without a key: **503** `Gemini not configured`. Example (PowerShell, after login):
 
 ```powershell
 $base = "http://127.0.0.1:5000/api"
@@ -350,6 +346,43 @@ Production: `npm run build` → `frontend/dist/`.
   - `issue_date`
 
 Field verification recomputes the canonical core hash, looks up indexed records (`cert_id/core_hash/token_id`), then confirms chain status.
+
+## Related use cases (same trust model)
+
+TrueCert implements **academic credentials** only. The same **on-chain anchor + IPFS metadata + issuer signature** pattern applies to other domains where a **trusted organization** attests a record and **third parties** must verify it without private database access.
+
+| Layer | Role (same as TrueCert) |
+|-------|-------------------------|
+| **On-chain** | Issuer identity, token/id, valid/revoked, `coreHash`, pointer to metadata |
+| **IPFS** | Rich document: images, descriptions, issuer profile, human-readable fields |
+| **Off-chain crypto** | Canonical signed JSON (e.g. Ed25519) so tampering is detectable |
+
+### Example domains
+
+#### Professional licenses
+- **Issuer:** licensing board or regulator  
+- **On-chain:** license id, active/revoked, superseded credential  
+- **IPFS:** license PDF, specialty, issue/expiry dates  
+- **Verifier:** employer, regulator, public lookup  
+
+#### Product authenticity (supply chain)
+- **Issuer:** manufacturer or certified auditor  
+- **On-chain:** batch/serial commitment, transfer between parties  
+- **IPFS:** COA, inspection photos, specifications  
+- **Verifier:** retailer, customs, end customer (QR scan)  
+
+#### Training and micro-credentials
+- **Issuer:** employer or training provider  
+- **On-chain:** completion badge, revoke if fraud discovered  
+- **IPFS:** course name, hours, skills tags  
+- **Verifier:** HR, partner institutions  
+
+#### Government-issued permits
+- **Issuer:** ministry or agency (whitelisted on-chain)  
+- **On-chain:** permit id, voided flag  
+- **IPFS:** permit PDF, conditions, reference numbers  
+- **Verifier:** banks, border agencies, contractors  
+
 
 ## Institution logo support
 
