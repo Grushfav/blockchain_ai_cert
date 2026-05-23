@@ -9,3 +9,4 @@ werkzeug==3.0.3
 psycopg[binary]>=3.2.13,<3.4
 google-genai==1.75.0
 gunicorn>=22.0.0
+Flask-Migrate>=4.0.7

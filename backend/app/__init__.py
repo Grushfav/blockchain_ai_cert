@@ -1,8 +1,10 @@
 import os
+from app.extensions import db, jwt, migrate
 from pathlib import Path
 
 from dotenv import load_dotenv
 from flask import Flask
+from app import models
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from flask import make_response, request
@@ -53,6 +55,8 @@ def create_app(config_class: type = Config) -> Flask:
 
     db.init_app(app)
     jwt.init_app(app)
+    migrate.init_app(app, db)
+
 
     from app.routes.api import bp as api_bp
     from app.admin_analytics_routes import register_admin_analytics_routes
@@ -67,8 +71,9 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(api_bp)
 
     with app.app_context():
-        db.create_all()
-        _apply_lightweight_migrations()
+        # db.create_all()
+        # _apply_lightweight_migrations()
+        # _bootstrap_admin(app)
         _bootstrap_admin(app)
 
     return app
