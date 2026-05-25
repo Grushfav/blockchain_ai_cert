@@ -20,6 +20,7 @@ from app.models import ActivityLog, CertificateRecord, MintBatch, MintBatchRow, 
 from app.services import analytics_service, gemini_service, risk_hints_service
 
 _api_bp: Blueprint | None = None
+_routes_registered = False
 
 AMOY_TX_EXPLORER = "https://amoy.polygonscan.com/tx/"
 
@@ -262,8 +263,11 @@ def _reduced_institutions_for_brief(inst_rows: list[dict[str, Any]], cap: int = 
 
 
 def register_admin_analytics_routes(bp: Blueprint) -> None:
-    global _api_bp
+    global _api_bp, _routes_registered
     _api_bp = bp
+    if _routes_registered:
+        return
+    _routes_registered = True
 
     @bp.get("/admin/analytics/summary")
     @jwt_required()

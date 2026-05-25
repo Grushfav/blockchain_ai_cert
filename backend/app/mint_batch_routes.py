@@ -32,6 +32,7 @@ BATCH_ROW_AI_MAX_QUESTION_CHARS = 500
 
 # Late-bound to avoid circular import: set by register_mint_batch_routes
 _api_bp: Blueprint | None = None
+_routes_registered = False
 
 
 def _require_roles(*roles: str) -> None:
@@ -298,8 +299,11 @@ def _verify_certificate_mint_receipt(
 
 
 def register_mint_batch_routes(bp: Blueprint) -> None:
-    global _api_bp
+    global _api_bp, _routes_registered
     _api_bp = bp
+    if _routes_registered:
+        return
+    _routes_registered = True
 
     @bp.post("/university/mint-batches")
     @jwt_required()

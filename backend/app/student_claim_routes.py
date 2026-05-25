@@ -16,6 +16,7 @@ from app.university_freeze import freeze_guard_response
 
 ROW_READY_FOR_CLAIM = frozenset({"mint_confirmed", "email_sent", "email_failed"})
 ACTIVE_STATUSES = frozenset({"pending", "approved"})
+_routes_registered = False
 
 
 def _require_roles(*roles: str) -> None:
@@ -98,6 +99,11 @@ def _find_mint_row_for_student(*, university_id: int, student_internal_id: str, 
 
 
 def register_student_claim_routes(bp: Blueprint) -> None:
+    global _routes_registered
+    if _routes_registered:
+        return
+    _routes_registered = True
+
     @bp.post("/public/student-claim-requests")
     def public_create_student_claim_request():
         data = request.get_json(silent=True) or {}
