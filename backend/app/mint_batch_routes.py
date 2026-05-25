@@ -953,6 +953,112 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 b.cumulative_execute_wall_ms = int(b.cumulative_execute_wall_ms or 0) + cw
             return cw
 
+        def _mark_row_minted_from_chain(
+            row_obj: MintBatchRow,
+            *,
+            token_id_int: int,
+            tx_hex: str,
+            prepared_at_snapshot: datetime | None,
+            chain_started_at: float,
+            error_message: str | None = None,
+        ) -> tuple[str, int | None, int]:
+            """Record an already-confirmed chain mint before any path can return."""
+            h = tx_hex if tx_hex.startswith("0x") else "0x" + tx_hex
+            row_obj.tx_hash = h
+            row_obj.token_id = token_id_int
+            row_obj.minted_at = datetime.utcnow()
+            row_obj.error_message = error_message
+
+            if os.environ.get("SENDGRID_API_KEY") or os.environ.get("SMTP_HOST"):
+                row_obj.row_status = "email_sent"
+                row_obj.emailed_at = datetime.utcnow()
+            else:
+                row_obj.row_status = "mint_confirmed"
+
+            platform_ms = int((time.perf_counter() - chain_started_at) * 1000)
+            prep_to_mint_ms = None
+            if prepared_at_snapshot and row_obj.minted_at:
+                prep_to_mint_ms = max(0, int((row_obj.minted_at - prepared_at_snapshot).total_seconds() * 1000))
+            row_obj.prepare_to_mint_ms = prep_to_mint_ms
+            row_obj.platform_mint_ms = platform_ms
+            return h, prep_to_mint_ms, platform_ms
+
+        def _append_activity_for_minted_row(row_obj: MintBatchRow, *, token_id_int: int, tx_hash: str) -> None:
+            try:
+                receipt = w3.eth.get_transaction_receipt(tx_hash)
+                proc = contract.events.CertificateMinted().process_receipt(receipt)
+                for lg in proc:
+                    args = lg["args"]
+                    if str(args.get("certId", "")).strip() == str(row_obj.cert_id).strip():
+                        _li = lg.get("logIndex", lg.get("log_index", 0))
+                        log_index = int(_li) if _li is not None else 0
+                        _append_mint_activity(
+                            university_id=uni.id,
+                            token_id=token_id_int,
+                            tx_hash=tx_hash,
+                            block_number=int(receipt["blockNumber"]),
+                            log_index=log_index,
+                            actor=minter_addr,
+                            metadata_uri=row_obj.metadata_uri or "",
+                            cert_id=row_obj.cert_id or "",
+                        )
+                        break
+            except Exception:
+                pass
+
+        def _minted_response_entry(
+            row_obj: MintBatchRow,
+            *,
+            token_id_int: int,
+            tx_hash: str,
+            prep_to_mint_ms: int | None,
+            platform_ms: int,
+        ) -> dict[str, Any]:
+            return {
+                "row_id": row_obj.id,
+                "token_id": token_id_int,
+                "tx_hash": tx_hash,
+                "timing": {
+                    # Wall time from row prepared_at (server prepare) until minted_at is set this request.
+                    "prepare_to_mint_ms": prep_to_mint_ms,
+                    # mint_for_issuer + receipt verify + DB updates + receipt scan for activity log.
+                    "platform_mint_ms": platform_ms,
+                },
+            }
+
+        def _record_unindexed_chain_mint(
+            *,
+            row_obj: MintBatchRow,
+            token_id_int: int,
+            tx_hex: str,
+            prepared_at_snapshot: datetime | None,
+            chain_started_at: float,
+            reason: str,
+        ) -> tuple[dict[str, Any], int]:
+            h, prep_to_mint_ms, platform_ms = _mark_row_minted_from_chain(
+                row_obj,
+                token_id_int=token_id_int,
+                tx_hex=tx_hex,
+                prepared_at_snapshot=prepared_at_snapshot,
+                chain_started_at=chain_started_at,
+                error_message=reason,
+            )
+            _append_activity_for_minted_row(row_obj, token_id_int=token_id_int, tx_hash=h)
+            if b.status == "authorized":
+                b.status = "executing"
+            b.updated_at = datetime.utcnow()
+            _maybe_complete_batch(b)
+            return (
+                _minted_response_entry(
+                    row_obj,
+                    token_id_int=token_id_int,
+                    tx_hash=h,
+                    prep_to_mint_ms=prep_to_mint_ms,
+                    platform_ms=platform_ms,
+                ),
+                _apply_execute_chunk_timing(),
+            )
+
         for ent in sorted(payload, key=lambda x: int(x.get("row_index", 0))):
             if processed >= max_mints:
                 break
@@ -1037,13 +1143,31 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                                 else:
                                     other_tid = None
                             if not other_tid:
+                                reason = (
+                                    "Certificate index collision on token_id after on-chain mint; "
+                                    "manual index repair required before certificate-index verification is reliable."
+                                )
+                                processed += 1
+                                minted_entry, chunk_wall_ms = _record_unindexed_chain_mint(
+                                    row_obj=row,
+                                    token_id_int=token_id_int,
+                                    tx_hex=tx_hex,
+                                    prepared_at_snapshot=prep_at_snapshot,
+                                    chain_started_at=chain_t0,
+                                    reason=reason,
+                                )
+                                minted_out.append(minted_entry)
+                                db.session.commit()
                                 return (
                                     jsonify(
                                         {
                                             "error": (
                                                 "Certificate index collision on token_id; another certificate record already "
-                                                "claims this token id. Resolve in DB or rebuild the index."
+                                                "claims this token id. The on-chain mint was recorded on the batch row; "
+                                                "resolve the certificate index before relying on index-based verification."
                                             ),
+                                            "partial": minted_out,
+                                            "timing": {"chunk_wall_ms": chunk_wall_ms},
                                             "collision": {
                                                 "token_id": token_id_int,
                                                 "existing_cert_id": existing.cert_id,
@@ -1082,13 +1206,31 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                                     db.session.flush()
                                     other_tid = None
                             if other_tid and other_tid.id != rec.id:
+                                reason = (
+                                    "Certificate index collision on token_id after on-chain mint; "
+                                    "manual index repair required before certificate-index verification is reliable."
+                                )
+                                processed += 1
+                                minted_entry, chunk_wall_ms = _record_unindexed_chain_mint(
+                                    row_obj=row,
+                                    token_id_int=token_id_int,
+                                    tx_hex=tx_hex,
+                                    prepared_at_snapshot=prep_at_snapshot,
+                                    chain_started_at=chain_t0,
+                                    reason=reason,
+                                )
+                                minted_out.append(minted_entry)
+                                db.session.commit()
                                 return (
                                     jsonify(
                                         {
                                             "error": (
                                                 "Certificate index collision on token_id; another certificate record already "
-                                                "claims this token id. Resolve in DB or rebuild the index."
+                                                "claims this token id. The on-chain mint was recorded on the batch row; "
+                                                "resolve the certificate index before relying on index-based verification."
                                             ),
+                                            "partial": minted_out,
+                                            "timing": {"chunk_wall_ms": chunk_wall_ms},
                                             "collision": {
                                                 "token_id": token_id_int,
                                                 "existing_cert_id": other_tid.cert_id,
@@ -1104,70 +1246,60 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                     rec.status = "issued"
             except Exception as e:
                 db.session.rollback()
-                row.row_status = "mint_failed"
-                row.error_message = str(e)
-                b.updated_at = datetime.utcnow()
-                chunk_wall_ms = _apply_execute_chunk_timing()
+                b = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
+                row = MintBatchRow.query.filter_by(id=int(ent["row_id"]), batch_id=batch_id).first()
+                if not b or not row:
+                    return jsonify({"error": f"DB update failed after on-chain mint: {e!s}"}), 500
+                reason = (
+                    "Certificate index update failed after on-chain mint; "
+                    f"manual index repair required: {e!s}"
+                )
+                processed += 1
+                minted_entry, chunk_wall_ms = _record_unindexed_chain_mint(
+                    row_obj=row,
+                    token_id_int=int(token_id),
+                    tx_hex=tx_hex,
+                    prepared_at_snapshot=prep_at_snapshot,
+                    chain_started_at=chain_t0,
+                    reason=reason,
+                )
+                minted_out.append(minted_entry)
                 db.session.commit()
                 return jsonify(
-                    {"error": f"DB update failed at row {row.row_index}: {e!s}", "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}
+                    {
+                        "error": (
+                            f"DB update failed at row {row.row_index} after the on-chain mint succeeded: {e!s}. "
+                            "The batch row was recorded as minted to prevent duplicate issuance."
+                        ),
+                        "partial": minted_out,
+                        "timing": {"chunk_wall_ms": chunk_wall_ms},
+                    }
                 ), 500
-            row.tx_hash = tx_hex if tx_hex.startswith("0x") else "0x" + tx_hex
-            row.token_id = int(token_id)
-            row.minted_at = datetime.utcnow()
-            row.row_status = "mint_confirmed"
-            row.error_message = None
 
-            h = row.tx_hash
-            try:
-                receipt = w3.eth.get_transaction_receipt(h)
-                proc = contract.events.CertificateMinted().process_receipt(receipt)
-                for lg in proc:
-                    args = lg["args"]
-                    if str(args.get("certId", "")).strip() == str(row.cert_id).strip():
-                        _li = lg.get("logIndex", lg.get("log_index", 0))
-                        log_index = int(_li) if _li is not None else 0
-                        _append_mint_activity(
-                            university_id=uni.id,
-                            token_id=int(token_id),
-                            tx_hash=h,
-                            block_number=int(receipt["blockNumber"]),
-                            log_index=log_index,
-                            actor=minter_addr,
-                            metadata_uri=row.metadata_uri or "",
-                            cert_id=row.cert_id or "",
-                        )
-                        break
-            except Exception:
-                pass
-
-            if os.environ.get("SENDGRID_API_KEY") or os.environ.get("SMTP_HOST"):
-                row.row_status = "email_sent"
-                row.emailed_at = datetime.utcnow()
-            else:
-                row.row_status = "mint_confirmed"
-
-            platform_ms = int((time.perf_counter() - chain_t0) * 1000)
-            prep_to_mint_ms = None
-            if prep_at_snapshot and row.minted_at:
-                prep_to_mint_ms = max(0, int((row.minted_at - prep_at_snapshot).total_seconds() * 1000))
-            row.prepare_to_mint_ms = prep_to_mint_ms
-            row.platform_mint_ms = platform_ms
+            token_id_int = int(token_id)
+            h, prep_to_mint_ms, platform_ms = _mark_row_minted_from_chain(
+                row,
+                token_id_int=token_id_int,
+                tx_hex=tx_hex,
+                prepared_at_snapshot=prep_at_snapshot,
+                chain_started_at=chain_t0,
+            )
+            _append_activity_for_minted_row(row, token_id_int=token_id_int, tx_hash=h)
 
             minted_out.append(
-                {
-                    "row_id": row.id,
-                    "token_id": int(token_id),
-                    "tx_hash": h,
-                    "timing": {
-                        # Wall time from row prepared_at (server prepare) until minted_at is set this request.
-                        "prepare_to_mint_ms": prep_to_mint_ms,
-                        # mint_for_issuer + receipt verify + DB updates + receipt scan for activity log.
-                        "platform_mint_ms": platform_ms,
-                    },
-                }
+                _minted_response_entry(
+                    row,
+                    token_id_int=token_id_int,
+                    tx_hash=h,
+                    prep_to_mint_ms=prep_to_mint_ms,
+                    platform_ms=platform_ms,
+                )
             )
             processed += 1
+            if b.status == "authorized":
+                b.status = "executing"
+            b.updated_at = datetime.utcnow()
+            db.session.commit()
 
         remaining = 0
         for ent in payload:
