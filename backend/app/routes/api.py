@@ -2082,6 +2082,16 @@ def verify_by_fields():
         onchain = blockchain_service.read_certificate_public(w3, contract, rec.token_id)
     except Exception as e:
         return jsonify({"error": f"Chain read failed: {e!s}"}), 502
+    if (rec.status or "").lower() != "issued" or not onchain.get("exists"):
+        return jsonify(
+            {
+                "matched": False,
+                "token_id": rec.token_id,
+                "core_hash": core_hash,
+                "on_chain": {"exists": bool(onchain.get("exists"))},
+                "error": "Indexed certificate is not minted on-chain",
+            }
+        ), 404
     offchain: dict[str, Any] | None = None
     from_db = _offchain_metadata_from_certificate_record(rec)
     if from_db is not None:

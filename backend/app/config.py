@@ -8,7 +8,11 @@ _INSTANCE_DIR = _BACKEND_DIR / "instance"
 
 def _default_sqlite_uri() -> str:
     _INSTANCE_DIR.mkdir(exist_ok=True)
-    db_path = (_INSTANCE_DIR / "truecert.db").resolve()
+    db_path = _INSTANCE_DIR / "truecert.db"
+    legacy_db_path = _INSTANCE_DIR / "trucert.db"
+    if not db_path.exists() and legacy_db_path.exists():
+        db_path = legacy_db_path
+    db_path = db_path.resolve()
     return f"sqlite:///{db_path.as_posix()}"
 
 
