@@ -16,6 +16,7 @@ from app.models import ActivityLog, MintAuthorizationRequest, MintBatch, MintBat
 from app.services import analytics_service
 
 _api_bp: Blueprint | None = None
+_routes_registered = False
 
 AMOY_TX_EXPLORER = "https://amoy.polygonscan.com/tx/"
 
@@ -32,8 +33,11 @@ def _require_university() -> tuple[User, int]:
 
 
 def register_university_analytics_routes(bp: Blueprint) -> None:
-    global _api_bp
+    global _api_bp, _routes_registered
     _api_bp = bp
+    if _routes_registered:
+        return
+    _routes_registered = True
 
     @bp.get("/university/analytics/summary")
     @jwt_required()
