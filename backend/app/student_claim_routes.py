@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from flask import Blueprint, abort, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
@@ -16,6 +17,7 @@ from app.university_freeze import freeze_guard_response
 
 ROW_READY_FOR_CLAIM = frozenset({"mint_confirmed", "email_sent", "email_failed"})
 ACTIVE_STATUSES = frozenset({"pending", "approved"})
+_routes_registered = False
 
 
 def _require_roles(*roles: str) -> None:
@@ -98,6 +100,11 @@ def _find_mint_row_for_student(*, university_id: int, student_internal_id: str, 
 
 
 def register_student_claim_routes(bp: Blueprint) -> None:
+    global _routes_registered
+    if _routes_registered:
+        return
+    _routes_registered = True
+
     @bp.post("/public/student-claim-requests")
     def public_create_student_claim_request():
         data = request.get_json(silent=True) or {}
@@ -163,9 +170,9 @@ def register_student_claim_routes(bp: Blueprint) -> None:
 
         rec = StudentClaimRequest(
             university_id=university_id,
-            mint_batch_row_id=row.id,
+            mint_batch_row_id=row.id if row else None,
             token_id=tid,
-            cert_id=(row.cert_id or "").strip() or None,
+            cert_id=((row.cert_id if row else cert_rec.cert_id if cert_rec else None) or "").strip() or None,
             student_internal_id=student_internal_id.strip(),
             student_email=student_email.strip().lower(),
             wallet_address=wallet,
