@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, MintBatch, MintBatchRow, University, User
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -287,6 +287,132 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+    def _cleanup_batch_mint_fixtures(self) -> None:
+        MintBatchRow.query.delete()
+        MintBatch.query.delete()
+        CertificateRecord.query.delete()
+        User.query.filter(User.email == "batchmint@example.edu").delete(synchronize_session=False)
+        University.query.filter_by(internal_id="batch-mint-test-uni").delete(synchronize_session=False)
+        db.session.commit()
+
+    def _seed_authorized_batch_row(self) -> tuple[University, User, MintBatch, MintBatchRow]:
+        import json
+
+        uni = University(
+            name="Batch Mint Uni",
+            internal_id="batch-mint-test-uni",
+            domain_email="example.edu",
+            wallet_address="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            status="verified",
+            institution_contact_email="registrar@example.edu",
+            institution_contact_phone="+10000000000",
+            institution_website="https://example.edu",
+            institution_license_id="LIC-1",
+            institution_license_authority="Board",
+            institution_license_valid_until="2035-12-31",
+        )
+        db.session.add(uni)
+        db.session.flush()
+        user = User(email="batchmint@example.edu", role="university", university_id=uni.id)
+        user.set_password("testpass123")
+        db.session.add(user)
+        batch = MintBatch(
+            university_id=uni.id,
+            status="authorized",
+            original_filename="batch.csv",
+            created_by_user_id=user.id,
+            total_rows=1,
+            valid_rows=1,
+            invalid_rows=0,
+            authorized_signature_hex="0x" + "1" * 130,
+        )
+        db.session.add(batch)
+        db.session.flush()
+        row = MintBatchRow(
+            batch_id=batch.id,
+            row_index=0,
+            cert_id="CERT-BATCH-RECOVER",
+            student_internal_id="IID-1",
+            student_email="student@example.edu",
+            student_full_name="Pat Lee",
+            degree_title="BSc CS",
+            issue_date="2024-06-01",
+            row_status="prepared",
+            metadata_uri="ipfs://QmBatch",
+            core_hash="0x" + "a" * 64,
+            prepared_at=datetime.utcnow(),
+        )
+        db.session.add(row)
+        db.session.flush()
+        batch.authorized_payload_json = json.dumps(
+            [
+                {
+                    "row_id": row.id,
+                    "row_index": row.row_index,
+                    "cert_id": row.cert_id,
+                    "core_hash": row.core_hash,
+                    "metadata_uri": row.metadata_uri,
+                    "expected_token_id": 77,
+                }
+            ]
+        )
+        db.session.commit()
+        return uni, user, batch, row
+
+    def _uni_jwt_batch_mint(self, user: User) -> dict[str, str]:
+        from flask_jwt_extended import create_access_token
+
+        tok = create_access_token(identity=str(user.id), additional_claims={"role": "university"})
+        return {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+
+    def test_batch_execute_recovers_existing_chain_mint_without_duplicate(self) -> None:
+        import app.mint_batch_routes as batch_mod
+
+        self._cleanup_batch_mint_fixtures()
+        _, user, batch, row = self._seed_authorized_batch_row()
+        headers = self._uni_jwt_batch_mint(user)
+
+        mock_contract = MagicMock()
+        mock_contract.events.CertificateMinted.return_value.process_receipt.return_value = []
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_transaction_receipt.return_value = {"blockNumber": 123}
+        existing_event = {
+            "token_id": 77,
+            "tx_hash": "0x" + "b" * 64,
+            "core_hash": row.core_hash,
+            "block_number": 123,
+            "log_index": 4,
+        }
+        with patch.object(batch_mod, "_require_contract_code", return_value=None):
+            with patch.object(batch_mod.blockchain_service, "get_w3", return_value=mock_w3):
+                with patch.object(batch_mod.blockchain_service, "get_contract", return_value=mock_contract):
+                    with patch.object(
+                        batch_mod.blockchain_service,
+                        "minter_account_address",
+                        return_value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                    ):
+                        with patch.object(
+                            batch_mod.blockchain_service,
+                            "find_minted_certificate_event",
+                            return_value=existing_event,
+                        ):
+                            with patch.object(batch_mod.blockchain_service, "mint_for_issuer") as mint_for_issuer:
+                                r = self.client.post(
+                                    f"/api/university/mint-batches/{batch.id}/execute",
+                                    json={"max_mints": 1},
+                                    headers=headers,
+                                )
+
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        mint_for_issuer.assert_not_called()
+        db.session.expire_all()
+        saved = db.session.get(MintBatchRow, row.id)
+        self.assertEqual(saved.row_status, "mint_confirmed")
+        self.assertEqual(saved.token_id, 77)
+        self.assertEqual(saved.tx_hash, existing_event["tx_hash"])
+        self.assertIn("Recovered existing", saved.error_message or "")
+        self._cleanup_batch_mint_fixtures()
 
 
 if __name__ == "__main__":
