@@ -230,6 +230,13 @@ def _append_mint_activity(
     )
 
 
+def _normalize_tx_hash(tx_hash: str | None) -> str:
+    h = (tx_hash or "").strip()
+    if h and not h.startswith("0x"):
+        h = "0x" + h
+    return h
+
+
 def _verify_certificate_mint_receipt(
     w3: Web3,
     contract,
@@ -956,7 +963,11 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         for ent in sorted(payload, key=lambda x: int(x.get("row_index", 0))):
             if processed >= max_mints:
                 break
-            row = MintBatchRow.query.filter_by(id=int(ent["row_id"]), batch_id=batch_id).first()
+            row = (
+                MintBatchRow.query.filter_by(id=int(ent["row_id"]), batch_id=batch_id)
+                .with_for_update()
+                .first()
+            )
             if not row:
                 continue
             if row.row_status in ("mint_confirmed", "email_sent", "email_failed"):
@@ -972,45 +983,60 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
 
             prep_at_snapshot = row.prepared_at
             chain_t0 = time.perf_counter()
-            try:
-                token_id, tx_hex = blockchain_service.mint_for_issuer(
-                    w3,
-                    contract,
-                    uni.wallet_address,
-                    row.metadata_uri or "",
-                    row.core_hash or "",
-                    row.cert_id or "",
-                )
-            except Exception as e:
-                row.row_status = "mint_failed"
-                row.error_message = str(e)
-                b.updated_at = datetime.utcnow()
-                chunk_wall_ms = _apply_execute_chunk_timing()
-                db.session.commit()
-                return jsonify(
-                    {"error": f"Mint failed at row {row.row_index}: {e!s}", "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}
-                ), 502
-
-            # Accept token id from chain; other mints may interleave between prepare and execute.
-
-            ok, reason = _verify_certificate_mint_receipt(
+            verification_warning: str | None = None
+            recovered_existing_mint = False
+            existing_mint = blockchain_service.find_minted_certificate_event(
                 w3,
                 contract,
-                tx_hex,
-                expected_issuer=uni.wallet_address,
-                expected_cert_id=row.cert_id or "",
-                expected_core_hash_hex=row.core_hash or "",
-                claimed_token_id=int(token_id),
-                minter_address=minter_addr,
+                issuer=uni.wallet_address,
+                cert_id=row.cert_id or "",
+                core_hash_hex=row.core_hash or "",
             )
-            if not ok:
-                row.row_status = "mint_failed"
-                row.error_message = reason
-                b.updated_at = datetime.utcnow()
-                chunk_wall_ms = _apply_execute_chunk_timing()
-                db.session.commit()
-                return jsonify({"error": reason, "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}), 400
+            if existing_mint:
+                # A previous execute may have landed on-chain but failed before the DB row was saved.
+                # Reconcile that mint instead of issuing a duplicate credential.
+                token_id = int(existing_mint["token_id"])
+                tx_hex = _normalize_tx_hash(str(existing_mint.get("tx_hash") or ""))
+                recovered_existing_mint = True
+                verification_warning = "Recovered existing on-chain mint for this certificate."
+            else:
+                try:
+                    token_id, tx_hex = blockchain_service.mint_for_issuer(
+                        w3,
+                        contract,
+                        uni.wallet_address,
+                        row.metadata_uri or "",
+                        row.core_hash or "",
+                        row.cert_id or "",
+                    )
+                except Exception as e:
+                    row.row_status = "mint_failed"
+                    row.error_message = str(e)
+                    b.updated_at = datetime.utcnow()
+                    chunk_wall_ms = _apply_execute_chunk_timing()
+                    db.session.commit()
+                    return jsonify(
+                        {"error": f"Mint failed at row {row.row_index}: {e!s}", "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}
+                    ), 502
 
+                # Accept token id from chain; other mints may interleave between prepare and execute.
+                ok, reason = _verify_certificate_mint_receipt(
+                    w3,
+                    contract,
+                    tx_hex,
+                    expected_issuer=uni.wallet_address,
+                    expected_cert_id=row.cert_id or "",
+                    expected_core_hash_hex=row.core_hash or "",
+                    claimed_token_id=int(token_id),
+                    minter_address=minter_addr,
+                )
+                if not ok:
+                    # mint_for_issuer already observed a successful CertificateMinted log. Do not leave
+                    # the row retryable; persist the mint below with a warning for operator follow-up.
+                    verification_warning = f"Receipt re-verification warning: {reason}"
+
+            row_id_for_recovery = int(row.id)
+            row_index_for_recovery = int(row.row_index)
             try:
                 token_id_int = int(token_id)
                 rec = CertificateRecord.query.filter_by(cert_id=row.cert_id).first() if row.cert_id else None
@@ -1037,21 +1063,10 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                                 else:
                                     other_tid = None
                             if not other_tid:
-                                return (
-                                    jsonify(
-                                        {
-                                            "error": (
-                                                "Certificate index collision on token_id; another certificate record already "
-                                                "claims this token id. Resolve in DB or rebuild the index."
-                                            ),
-                                            "collision": {
-                                                "token_id": token_id_int,
-                                                "existing_cert_id": existing.cert_id,
-                                                "existing_status": existing.status,
-                                            },
-                                        }
-                                    ),
-                                    500,
+                                raise RuntimeError(
+                                    "Certificate index collision on token_id; another certificate record already "
+                                    f"claims token {token_id_int} for cert_id {existing.cert_id!r} "
+                                    f"(status {existing.status!r}). Resolve in DB or rebuild the index."
                                 )
                     rec = CertificateRecord(
                         token_id=token_id_int,
@@ -1082,41 +1097,94 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                                     db.session.flush()
                                     other_tid = None
                             if other_tid and other_tid.id != rec.id:
-                                return (
-                                    jsonify(
-                                        {
-                                            "error": (
-                                                "Certificate index collision on token_id; another certificate record already "
-                                                "claims this token id. Resolve in DB or rebuild the index."
-                                            ),
-                                            "collision": {
-                                                "token_id": token_id_int,
-                                                "existing_cert_id": other_tid.cert_id,
-                                                "existing_status": other_tid.status,
-                                            },
-                                        }
-                                    ),
-                                    500,
+                                raise RuntimeError(
+                                    "Certificate index collision on token_id; another certificate record already "
+                                    f"claims token {token_id_int} for cert_id {other_tid.cert_id!r} "
+                                    f"(status {other_tid.status!r}). Resolve in DB or rebuild the index."
                                 )
                     rec.token_id = token_id_int
                     rec.ipfs_uri = row.metadata_uri or rec.ipfs_uri
                     rec.core_hash = row.core_hash or rec.core_hash
                     rec.status = "issued"
+                db.session.flush()
             except Exception as e:
                 db.session.rollback()
-                row.row_status = "mint_failed"
-                row.error_message = str(e)
-                b.updated_at = datetime.utcnow()
-                chunk_wall_ms = _apply_execute_chunk_timing()
-                db.session.commit()
+                token_id_int = int(token_id)
+                h = _normalize_tx_hash(str(tx_hex or ""))
+                platform_ms = int((time.perf_counter() - chain_t0) * 1000)
+                prep_to_mint_ms = None
+                try:
+                    recovery_row = MintBatchRow.query.filter_by(
+                        id=row_id_for_recovery,
+                        batch_id=batch_id,
+                    ).first()
+                    recovery_batch = MintBatch.query.filter_by(id=batch_id, university_id=uni.id).first()
+                    if recovery_row:
+                        recovery_row.tx_hash = h or None
+                        recovery_row.token_id = token_id_int
+                        recovery_row.minted_at = datetime.utcnow()
+                        recovery_row.row_status = "mint_confirmed"
+                        recovery_row.error_message = (
+                            "Mint confirmed on-chain, but certificate index reconciliation failed: "
+                            f"{e!s}"
+                        )
+                        if prep_at_snapshot and recovery_row.minted_at:
+                            prep_to_mint_ms = max(
+                                0,
+                                int((recovery_row.minted_at - prep_at_snapshot).total_seconds() * 1000),
+                            )
+                        recovery_row.prepare_to_mint_ms = prep_to_mint_ms
+                        recovery_row.platform_mint_ms = platform_ms
+                    chunk_wall_ms = int((time.perf_counter() - execute_chunk_start) * 1000)
+                    if recovery_batch:
+                        recovery_batch.last_execute_chunk_wall_ms = chunk_wall_ms
+                        recovery_batch.cumulative_execute_wall_ms = (
+                            int(recovery_batch.cumulative_execute_wall_ms or 0) + chunk_wall_ms
+                        )
+                        recovery_batch.updated_at = datetime.utcnow()
+                    db.session.commit()
+                    minted_out.append(
+                        {
+                            "row_id": row_id_for_recovery,
+                            "token_id": token_id_int,
+                            "tx_hash": h,
+                            "warning": "certificate_index_reconciliation_failed",
+                            "timing": {
+                                "prepare_to_mint_ms": prep_to_mint_ms,
+                                "platform_mint_ms": platform_ms,
+                            },
+                        }
+                    )
+                except Exception as recovery_error:
+                    db.session.rollback()
+                    chunk_wall_ms = int((time.perf_counter() - execute_chunk_start) * 1000)
+                    return jsonify(
+                        {
+                            "error": (
+                                f"DB update failed after on-chain mint at row {row_index_for_recovery}: {e!s}. "
+                                "Do not retry execute until this row is reconciled; retrying can duplicate the credential. "
+                                f"Recovery also failed: {recovery_error!s}"
+                            ),
+                            "partial": minted_out,
+                            "timing": {"chunk_wall_ms": chunk_wall_ms},
+                        }
+                    ), 500
                 return jsonify(
-                    {"error": f"DB update failed at row {row.row_index}: {e!s}", "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}
+                    {
+                        "error": (
+                            f"Certificate minted on-chain at row {row_index_for_recovery}, but certificate index "
+                            "reconciliation failed. The row was marked minted to prevent duplicate retries."
+                        ),
+                        "detail": str(e),
+                        "partial": minted_out,
+                        "timing": {"chunk_wall_ms": chunk_wall_ms},
+                    }
                 ), 500
-            row.tx_hash = tx_hex if tx_hex.startswith("0x") else "0x" + tx_hex
+            row.tx_hash = _normalize_tx_hash(str(tx_hex or ""))
             row.token_id = int(token_id)
             row.minted_at = datetime.utcnow()
             row.row_status = "mint_confirmed"
-            row.error_message = None
+            row.error_message = verification_warning
 
             h = row.tx_hash
             try:
@@ -1154,20 +1222,24 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             row.prepare_to_mint_ms = prep_to_mint_ms
             row.platform_mint_ms = platform_ms
 
-            minted_out.append(
-                {
-                    "row_id": row.id,
-                    "token_id": int(token_id),
-                    "tx_hash": h,
-                    "timing": {
-                        # Wall time from row prepared_at (server prepare) until minted_at is set this request.
-                        "prepare_to_mint_ms": prep_to_mint_ms,
-                        # mint_for_issuer + receipt verify + DB updates + receipt scan for activity log.
-                        "platform_mint_ms": platform_ms,
-                    },
-                }
-            )
+            minted_entry = {
+                "row_id": row.id,
+                "token_id": int(token_id),
+                "tx_hash": h,
+                "timing": {
+                    # Wall time from row prepared_at (server prepare) until minted_at is set this request.
+                    "prepare_to_mint_ms": prep_to_mint_ms,
+                    # mint_for_issuer + receipt verify + DB updates + receipt scan for activity log.
+                    "platform_mint_ms": platform_ms,
+                },
+            }
+            if verification_warning:
+                minted_entry["warning"] = verification_warning
+            if recovered_existing_mint:
+                minted_entry["recovered_existing_mint"] = True
+            minted_out.append(minted_entry)
             processed += 1
+            db.session.commit()
 
         remaining = 0
         for ent in payload:
