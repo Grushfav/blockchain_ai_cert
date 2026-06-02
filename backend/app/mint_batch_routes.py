@@ -1011,8 +1011,28 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 db.session.commit()
                 return jsonify({"error": reason, "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}), 400
 
+            token_id_int = int(token_id)
+            h = tx_hex if tx_hex.startswith("0x") else "0x" + tx_hex
+            row.tx_hash = h
+            row.token_id = token_id_int
+            row.minted_at = datetime.utcnow()
+            row.row_status = "mint_confirmed"
+            row.error_message = None
+            row.platform_mint_ms = int((time.perf_counter() - chain_t0) * 1000)
+            if prep_at_snapshot and row.minted_at:
+                row.prepare_to_mint_ms = max(0, int((row.minted_at - prep_at_snapshot).total_seconds() * 1000))
+            b.updated_at = datetime.utcnow()
+            db.session.commit()
+            chain_success_out = {
+                "row_id": row.id,
+                "token_id": token_id_int,
+                "tx_hash": h,
+                "timing": {
+                    "prepare_to_mint_ms": row.prepare_to_mint_ms,
+                    "platform_mint_ms": row.platform_mint_ms,
+                },
+            }
             try:
-                token_id_int = int(token_id)
                 rec = CertificateRecord.query.filter_by(cert_id=row.cert_id).first() if row.cert_id else None
                 if not rec:
                     # Collision check must also run for brand-new records, otherwise INSERT can violate UNIQUE(token_id).
@@ -1104,21 +1124,12 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                     rec.status = "issued"
             except Exception as e:
                 db.session.rollback()
-                row.row_status = "mint_failed"
-                row.error_message = str(e)
-                b.updated_at = datetime.utcnow()
                 chunk_wall_ms = _apply_execute_chunk_timing()
-                db.session.commit()
                 return jsonify(
-                    {"error": f"DB update failed at row {row.row_index}: {e!s}", "partial": minted_out, "timing": {"chunk_wall_ms": chunk_wall_ms}}
+                    {"error": f"DB update failed at row {row.row_index}: {e!s}", "partial": minted_out + [chain_success_out], "timing": {"chunk_wall_ms": chunk_wall_ms}}
                 ), 500
-            row.tx_hash = tx_hex if tx_hex.startswith("0x") else "0x" + tx_hex
-            row.token_id = int(token_id)
-            row.minted_at = datetime.utcnow()
-            row.row_status = "mint_confirmed"
-            row.error_message = None
 
-            h = row.tx_hash
+            h = row.tx_hash or h
             try:
                 receipt = w3.eth.get_transaction_receipt(h)
                 proc = contract.events.CertificateMinted().process_receipt(receipt)
