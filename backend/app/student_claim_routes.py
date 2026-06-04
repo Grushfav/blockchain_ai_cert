@@ -163,9 +163,9 @@ def register_student_claim_routes(bp: Blueprint) -> None:
 
         rec = StudentClaimRequest(
             university_id=university_id,
-            mint_batch_row_id=row.id,
+            mint_batch_row_id=row.id if row else None,
             token_id=tid,
-            cert_id=(row.cert_id or "").strip() or None,
+            cert_id=((row.cert_id if row else cert_rec.cert_id) or "").strip() or None,
             student_internal_id=student_internal_id.strip(),
             student_email=student_email.strip().lower(),
             wallet_address=wallet,
