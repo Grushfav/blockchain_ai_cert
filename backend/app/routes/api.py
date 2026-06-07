@@ -1331,6 +1331,22 @@ def submit_mint_authorization():
     # Token ids are sequential; other mints can interleave between prepare and submit.
     # The authorization commitment does not include token_id, so accept the minted token id and reconcile the DB index.
     token_id_int = int(token_id)
+    now_utc = datetime.utcnow()
+    prepare_to_complete_ms = None
+    if req.created_at:
+        prepare_to_complete_ms = max(0, int((now_utc - req.created_at).total_seconds() * 1000))
+    req.status = "minted"
+    req.failure_code = None
+    req.signature_hex = signature
+    req.digest_hex = digest
+    req.minter_tx_hash = tx_hex
+    req.completed_at = now_utc
+    req.prepare_to_complete_ms = prepare_to_complete_ms
+    req.platform_mint_ms = int((time.perf_counter() - chain_t0) * 1000)
+    uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
+    sync_uni_eip712_watermark(uni)
+    db.session.commit()
+
     rec = CertificateRecord.query.filter_by(cert_id=req.cert_id).first()
     if not rec:
         existing = CertificateRecord.query.filter_by(token_id=token_id_int).first()
@@ -1423,13 +1439,6 @@ def submit_mint_authorization():
             rec.signed_metadata_json = req.signed_metadata_json
             rec.student_internal_id = req.student_internal_id or rec.student_internal_id
             rec.student_email = req.student_email or rec.student_email
-    req.status = "minted"
-    req.failure_code = None
-    req.signature_hex = signature
-    req.digest_hex = digest
-    req.minter_tx_hash = tx_hex
-    uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
-    sync_uni_eip712_watermark(uni)
 
     h = (tx_hex or "").strip()
     if not h.startswith("0x"):
@@ -1483,7 +1492,6 @@ def submit_mint_authorization():
     platform_mint_ms = int((time.perf_counter() - chain_t0) * 1000)
 
     now_utc = datetime.utcnow()
-    prepare_to_complete_ms = None
     if req.created_at:
         prepare_to_complete_ms = max(0, int((now_utc - req.created_at).total_seconds() * 1000))
     req.completed_at = now_utc
