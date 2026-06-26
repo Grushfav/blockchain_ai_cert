@@ -297,6 +297,76 @@ def _verify_certificate_mint_receipt(
     return True, ""
 
 
+def _same_core_hash(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    try:
+        l = left.strip()
+        r = right.strip()
+        if not l.startswith("0x"):
+            l = "0x" + l
+        if not r.startswith("0x"):
+            r = "0x" + r
+        return Web3.to_bytes(hexstr=l) == Web3.to_bytes(hexstr=r)
+    except Exception:
+        return False
+
+
+def _record_batch_row_minted_from_event(
+    row: MintBatchRow,
+    uni: University,
+    mint_event: dict[str, Any],
+) -> str | None:
+    """Mark a row terminal after an on-chain mint is known, even if the local index is stale."""
+    token_id_int = int(mint_event["token_id"])
+    tx_hash = (mint_event.get("tx_hash") or row.tx_hash or "").strip() or None
+    if tx_hash and not tx_hash.startswith("0x"):
+        tx_hash = "0x" + tx_hash
+    metadata_uri = str(mint_event.get("metadata_uri") or row.metadata_uri or "")
+    warning = None
+
+    rec = CertificateRecord.query.filter_by(cert_id=row.cert_id).first() if row.cert_id else None
+    if not rec:
+        token_holder = CertificateRecord.query.filter_by(token_id=token_id_int).first()
+        if token_holder and (token_holder.status or "").lower() == "prepared":
+            db.session.delete(token_holder)
+            db.session.flush()
+            token_holder = None
+        if token_holder:
+            warning = "Mint confirmed on-chain, but certificate index token_id collision remains."
+        else:
+            rec = CertificateRecord(
+                token_id=token_id_int,
+                university_id=uni.id,
+                cert_id=row.cert_id,
+                ipfs_uri=metadata_uri,
+                core_hash=row.core_hash or "",
+                status="issued",
+            )
+            db.session.add(rec)
+    else:
+        token_holder = CertificateRecord.query.filter_by(token_id=token_id_int).first()
+        if token_holder and token_holder.id != rec.id:
+            if (token_holder.status or "").lower() == "prepared":
+                db.session.delete(token_holder)
+                db.session.flush()
+            else:
+                warning = "Mint confirmed on-chain, but certificate index token_id collision remains."
+        if warning is None:
+            rec.token_id = token_id_int
+        rec.university_id = uni.id
+        rec.ipfs_uri = metadata_uri or rec.ipfs_uri
+        rec.core_hash = row.core_hash or rec.core_hash
+        rec.status = "issued"
+
+    row.tx_hash = tx_hash
+    row.token_id = token_id_int
+    row.minted_at = row.minted_at or datetime.utcnow()
+    row.row_status = "mint_confirmed"
+    row.error_message = warning
+    return warning
+
+
 def register_mint_batch_routes(bp: Blueprint) -> None:
     global _api_bp
     _api_bp = bp
@@ -577,6 +647,42 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             )
 
         if row.row_status == "mint_failed" and row.metadata_uri and row.core_hash:
+            try:
+                w3 = blockchain_service.get_w3()
+                cfg_err = _require_contract_code(w3)
+                if cfg_err:
+                    return jsonify({"error": cfg_err}), 503
+                contract = blockchain_service.get_contract(w3)
+                existing_mint = blockchain_service.find_minted_certificate_by_cert_id(
+                    w3,
+                    contract,
+                    issuer=uni.wallet_address,
+                    cert_id=row.cert_id or "",
+                    clamp_window=False,
+                )
+            except Exception as e:
+                return jsonify({"error": f"Chain read failed: {e!s}"}), 502
+            if existing_mint:
+                if not _same_core_hash(str(existing_mint.get("core_hash") or ""), row.core_hash):
+                    row.error_message = (
+                        "A certificate with this cert_id is already minted on-chain with different metadata."
+                    )
+                    db.session.commit()
+                    return jsonify({"error": row.error_message, "token_id": int(existing_mint["token_id"])}), 409
+                warning = _record_batch_row_minted_from_event(row, uni, existing_mint)
+                db.session.commit()
+                return jsonify(
+                    {
+                        "metadata_uri": row.metadata_uri,
+                        "core_hash": row.core_hash,
+                        "cert_id": row.cert_id,
+                        "token_id": int(existing_mint["token_id"]),
+                        "tx_hash": existing_mint.get("tx_hash"),
+                        "idempotent": True,
+                        "already_minted": True,
+                        "index_warning": warning,
+                    }
+                )
             row.row_status = "prepared"
             row.error_message = None
             db.session.commit()
@@ -970,6 +1076,58 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             if row.row_status != "prepared":
                 return jsonify({"error": f"Row {row.row_index} is not prepared (status {row.row_status})"}), 400
 
+            existing_mint = blockchain_service.find_minted_certificate_by_cert_id(
+                w3,
+                contract,
+                issuer=uni.wallet_address,
+                cert_id=row.cert_id or "",
+                clamp_window=False,
+            )
+            if existing_mint:
+                if not _same_core_hash(str(existing_mint.get("core_hash") or ""), row.core_hash):
+                    row.row_status = "mint_failed"
+                    row.error_message = (
+                        "A certificate with this cert_id is already minted on-chain with different metadata."
+                    )
+                    b.updated_at = datetime.utcnow()
+                    chunk_wall_ms = _apply_execute_chunk_timing()
+                    db.session.commit()
+                    return (
+                        jsonify(
+                            {
+                                "error": row.error_message,
+                                "partial": minted_out,
+                                "token_id": int(existing_mint["token_id"]),
+                                "timing": {"chunk_wall_ms": chunk_wall_ms},
+                            }
+                        ),
+                        409,
+                    )
+                warning = _record_batch_row_minted_from_event(row, uni, existing_mint)
+                platform_ms = 0
+                prep_to_mint_ms = None
+                if prep_at_snapshot := row.prepared_at:
+                    prep_to_mint_ms = max(0, int((row.minted_at - prep_at_snapshot).total_seconds() * 1000))
+                row.prepare_to_mint_ms = prep_to_mint_ms
+                row.platform_mint_ms = platform_ms
+                b.updated_at = datetime.utcnow()
+                minted_out.append(
+                    {
+                        "row_id": row.id,
+                        "token_id": int(existing_mint["token_id"]),
+                        "tx_hash": existing_mint.get("tx_hash"),
+                        "idempotent": True,
+                        "index_warning": warning,
+                        "timing": {
+                            "prepare_to_mint_ms": prep_to_mint_ms,
+                            "platform_mint_ms": platform_ms,
+                        },
+                    }
+                )
+                processed += 1
+                db.session.commit()
+                continue
+
             prep_at_snapshot = row.prepared_at
             chain_t0 = time.perf_counter()
             try:
@@ -1023,12 +1181,14 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                             db.session.flush()
                         else:
                             # Attempt reconciliation: move the existing record to its real on-chain token id by certId.
-                            other_tid = blockchain_service.find_minted_token_id_by_cert_id(
+                            other_mint = blockchain_service.find_minted_certificate_by_cert_id(
                                 w3,
                                 contract,
                                 issuer=uni.wallet_address,
                                 cert_id=str(existing.cert_id or "").strip(),
+                                clamp_window=False,
                             )
+                            other_tid = int(other_mint["token_id"]) if other_mint else None
                             if other_tid and int(other_tid) != token_id_int:
                                 # Avoid cascading collisions.
                                 if CertificateRecord.query.filter_by(token_id=int(other_tid)).first() is None:
@@ -1037,6 +1197,17 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                                 else:
                                     other_tid = None
                             if not other_tid:
+                                _record_batch_row_minted_from_event(
+                                    row,
+                                    uni,
+                                    {
+                                        "token_id": token_id_int,
+                                        "tx_hash": tx_hex,
+                                        "metadata_uri": row.metadata_uri or "",
+                                        "core_hash": row.core_hash or "",
+                                    },
+                                )
+                                db.session.commit()
                                 return (
                                     jsonify(
                                         {
@@ -1070,18 +1241,31 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                             db.session.flush()
                         else:
                             # Attempt reconciliation on the conflicting record if it points to a different cert.
-                            other_chain = blockchain_service.find_minted_token_id_by_cert_id(
+                            other_mint = blockchain_service.find_minted_certificate_by_cert_id(
                                 w3,
                                 contract,
                                 issuer=uni.wallet_address,
                                 cert_id=str(other_tid.cert_id or "").strip(),
+                                clamp_window=False,
                             )
+                            other_chain = int(other_mint["token_id"]) if other_mint else None
                             if other_chain and int(other_chain) != token_id_int:
                                 if CertificateRecord.query.filter_by(token_id=int(other_chain)).first() is None:
                                     other_tid.token_id = int(other_chain)
                                     db.session.flush()
                                     other_tid = None
                             if other_tid and other_tid.id != rec.id:
+                                _record_batch_row_minted_from_event(
+                                    row,
+                                    uni,
+                                    {
+                                        "token_id": token_id_int,
+                                        "tx_hash": tx_hex,
+                                        "metadata_uri": row.metadata_uri or "",
+                                        "core_hash": row.core_hash or "",
+                                    },
+                                )
+                                db.session.commit()
                                 return (
                                     jsonify(
                                         {
@@ -1168,6 +1352,7 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 }
             )
             processed += 1
+            db.session.commit()
 
         remaining = 0
         for ent in payload:

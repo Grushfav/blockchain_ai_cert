@@ -1075,6 +1075,21 @@ def _fetch_offchain_metadata_from_uri(uri: str) -> dict[str, Any]:
     return out
 
 
+def _same_core_hash(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    try:
+        l = left.strip()
+        r = right.strip()
+        if not l.startswith("0x"):
+            l = "0x" + l
+        if not r.startswith("0x"):
+            r = "0x" + r
+        return Web3.to_bytes(hexstr=l) == Web3.to_bytes(hexstr=r)
+    except Exception:
+        return False
+
+
 @bp.post("/university/certificates/prepare-mint")
 @jwt_required()
 def prepare_mint_certificate():
@@ -1299,6 +1314,102 @@ def submit_mint_authorization():
 
     digest = eip712_service.typed_data_signable_hash_hex(full)
 
+    existing_mint = blockchain_service.find_minted_certificate_by_cert_id(
+        w3,
+        contract,
+        issuer=uni.wallet_address,
+        cert_id=req.cert_id,
+        clamp_window=False,
+    )
+    if existing_mint:
+        token_id_int = int(existing_mint["token_id"])
+        if not _same_core_hash(str(existing_mint.get("core_hash") or ""), req.core_hash):
+            req.status = "failed"
+            req.failure_code = "already_minted_conflict"
+            db.session.commit()
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "A certificate with this cert_id is already minted on-chain with different metadata. "
+                            "Prepare a new certificate id or contact support."
+                        ),
+                        "token_id": token_id_int,
+                    }
+                ),
+                409,
+            )
+
+        rec = CertificateRecord.query.filter_by(cert_id=req.cert_id).first()
+        if not rec:
+            token_holder = CertificateRecord.query.filter_by(token_id=token_id_int).first()
+            if token_holder and (token_holder.status or "").lower() == "prepared":
+                db.session.delete(token_holder)
+                db.session.flush()
+                token_holder = None
+            if token_holder:
+                req.status = "minted"
+                req.failure_code = None
+                req.signature_hex = signature
+                req.digest_hex = digest
+                req.minter_tx_hash = existing_mint.get("tx_hash")
+                uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
+                sync_uni_eip712_watermark(uni)
+                db.session.commit()
+                return (
+                    jsonify(
+                        {
+                            "error": "Certificate was already minted on-chain, but the local token index collides.",
+                            "token_id": token_id_int,
+                            "mint_request_id": mint_request_id,
+                            "idempotent": True,
+                        }
+                    ),
+                    409,
+                )
+            rec = CertificateRecord(
+                token_id=token_id_int,
+                university_id=uni.id,
+                cert_id=req.cert_id,
+                ipfs_uri=str(existing_mint.get("metadata_uri") or req.metadata_uri or ""),
+                core_hash=req.core_hash,
+                status="issued",
+                signed_metadata_json=req.signed_metadata_json,
+                student_internal_id=req.student_internal_id,
+                student_email=req.student_email,
+            )
+            db.session.add(rec)
+        else:
+            rec.token_id = token_id_int
+            rec.university_id = uni.id
+            rec.ipfs_uri = str(existing_mint.get("metadata_uri") or req.metadata_uri or rec.ipfs_uri)
+            rec.core_hash = req.core_hash
+            rec.status = "issued"
+            if (req.signed_metadata_json or "").strip():
+                rec.signed_metadata_json = req.signed_metadata_json
+                rec.student_internal_id = req.student_internal_id or rec.student_internal_id
+                rec.student_email = req.student_email or rec.student_email
+
+        req.status = "minted"
+        req.failure_code = None
+        req.signature_hex = signature
+        req.digest_hex = digest
+        req.minter_tx_hash = existing_mint.get("tx_hash")
+        if not req.completed_at:
+            req.completed_at = datetime.utcnow()
+        uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
+        sync_uni_eip712_watermark(uni)
+        db.session.commit()
+        return jsonify(
+            {
+                "token_id": token_id_int,
+                "tx_hash": existing_mint.get("tx_hash"),
+                "mint_request_id": mint_request_id,
+                "eip712_digest": digest,
+                "idempotent": True,
+            }
+        )
+
     mint_uri = (req.metadata_uri or "").strip()
     if (req.signed_metadata_json or "").strip():
         # Legacy mints used an HTTPS tokenURI tied to nextTokenId; realign before mint if another mint interleaved.
@@ -1339,18 +1450,28 @@ def submit_mint_authorization():
                 db.session.delete(existing)
                 db.session.flush()
             else:
-                other_tid = blockchain_service.find_minted_token_id_by_cert_id(
+                other_mint = blockchain_service.find_minted_certificate_by_cert_id(
                     w3,
                     contract,
                     issuer=uni.wallet_address,
                     cert_id=str(existing.cert_id or "").strip(),
+                    clamp_window=False,
                 )
+                other_tid = int(other_mint["token_id"]) if other_mint else None
                 if other_tid and int(other_tid) != token_id_int:
                     if CertificateRecord.query.filter_by(token_id=int(other_tid)).first() is None:
                         existing.token_id = int(other_tid)
                         db.session.flush()
                         existing = None
                 if existing:
+                    req.status = "minted"
+                    req.failure_code = None
+                    req.signature_hex = signature
+                    req.digest_hex = digest
+                    req.minter_tx_hash = tx_hex
+                    uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
+                    sync_uni_eip712_watermark(uni)
+                    db.session.commit()
                     return (
                         jsonify(
                             {
@@ -1387,18 +1508,28 @@ def submit_mint_authorization():
                 db.session.delete(other_tid)
                 db.session.flush()
             else:
-                other_chain = blockchain_service.find_minted_token_id_by_cert_id(
+                other_mint = blockchain_service.find_minted_certificate_by_cert_id(
                     w3,
                     contract,
                     issuer=uni.wallet_address,
                     cert_id=str(other_tid.cert_id or "").strip(),
+                    clamp_window=False,
                 )
+                other_chain = int(other_mint["token_id"]) if other_mint else None
                 if other_chain and int(other_chain) != token_id_int:
                     if CertificateRecord.query.filter_by(token_id=int(other_chain)).first() is None:
                         other_tid.token_id = int(other_chain)
                         db.session.flush()
                         other_tid = None
                 if other_tid and other_tid.id != rec.id:
+                    req.status = "minted"
+                    req.failure_code = None
+                    req.signature_hex = signature
+                    req.digest_hex = digest
+                    req.minter_tx_hash = tx_hex
+                    uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
+                    sync_uni_eip712_watermark(uni)
+                    db.session.commit()
                     return (
                         jsonify(
                             {

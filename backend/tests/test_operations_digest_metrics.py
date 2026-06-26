@@ -7,7 +7,16 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    StudentClaimRequest,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -152,6 +161,9 @@ class OperationsDigestMetricsTests(unittest.TestCase):
     # --- Single-mint HTTPS metadata (same app/db lifecycle as class; must run before tearDownClass drop_all) ---
 
     def _cleanup_mint_fixtures(self) -> None:
+        StudentClaimRequest.query.delete()
+        MintBatchRow.query.delete()
+        MintBatch.query.delete()
         MintAuthorizationRequest.query.delete()
         CertificateRecord.query.delete()
         User.query.filter(User.email == "singlemint@example.edu").delete(synchronize_session=False)
@@ -287,6 +299,202 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+    def test_single_mint_claim_request_does_not_require_batch_row(self) -> None:
+        self._cleanup_mint_fixtures()
+        uni, _ = self._seed_verified_university_single_mint()
+        db.session.add(
+            CertificateRecord(
+                token_id=101,
+                university_id=uni.id,
+                cert_id="CERT-SINGLE-101",
+                ipfs_uri="ipfs://bafyexample",
+                core_hash="0x" + "a" * 64,
+                status="issued",
+                student_internal_id="stu-101",
+                student_email="student@example.edu",
+            )
+        )
+        db.session.commit()
+
+        try:
+            with (
+                patch(
+                    "app.student_claim_routes.blockchain_service.escrow_claim_eligibility",
+                    return_value=(True, None),
+                ),
+                patch(
+                    "app.student_claim_routes.notification_service.notify_university_users",
+                    return_value=0,
+                ),
+            ):
+                resp = self.client.post(
+                    "/api/public/student-claim-requests",
+                    json={
+                        "university_id": uni.id,
+                        "student_internal_id": "stu-101",
+                        "student_email": "Student@Example.Edu",
+                        "wallet_address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                    },
+                )
+
+            self.assertEqual(resp.status_code, 201, resp.get_data(as_text=True))
+            self.assertEqual((resp.get_json() or {}).get("token_id"), 101)
+            claim = StudentClaimRequest.query.one()
+            self.assertIsNone(claim.mint_batch_row_id)
+            self.assertEqual(claim.cert_id, "CERT-SINGLE-101")
+            self.assertEqual(claim.student_email, "student@example.edu")
+        finally:
+            self._cleanup_mint_fixtures()
+
+    def test_submit_single_mint_reconciles_existing_onchain_cert_without_remint(self) -> None:
+        from app.routes import api as api_mod
+
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        req = MintAuthorizationRequest(
+            id="retry-single-1",
+            university_id=uni.id,
+            cert_id="CERT-RETRY-1",
+            core_hash="0x" + "a" * 64,
+            metadata_uri="ipfs://QmRetrySingle",
+            expected_token_id=77,
+            commitment_hex="0x" + "0" * 64,
+            nonce_snapshot=0,
+            expiry_unix=int((datetime.utcnow() + timedelta(hours=1)).timestamp()),
+            status="pending",
+        )
+        db.session.add(req)
+        db.session.commit()
+
+        mock_w3 = MagicMock()
+        mock_contract = MagicMock()
+        mock_contract.functions.minter.return_value.call.return_value = "0x" + "b" * 40
+        mock_contract.functions.whitelistedIssuers.return_value.call.return_value = True
+        existing_mint = {
+            "token_id": 77,
+            "tx_hash": "0x" + "7" * 64,
+            "metadata_uri": "ipfs://QmRetrySingle",
+            "core_hash": req.core_hash,
+        }
+        mint_for_issuer = MagicMock(side_effect=AssertionError("must not mint duplicate cert_id"))
+
+        with patch.object(api_mod.eip712_service, "recover_typed_data_signer", return_value=uni.wallet_address):
+            with patch.object(api_mod.eip712_service, "typed_data_signable_hash_hex", return_value="0x" + "d" * 64):
+                with patch.object(api_mod, "_require_contract_code", return_value=None):
+                    with patch.object(api_mod.blockchain_service, "get_w3", return_value=mock_w3):
+                        with patch.object(api_mod.blockchain_service, "get_contract", return_value=mock_contract):
+                            with patch.object(api_mod.blockchain_service, "minter_account_address", return_value="0x" + "b" * 40):
+                                with patch.object(
+                                    api_mod.blockchain_service,
+                                    "find_minted_certificate_by_cert_id",
+                                    return_value=existing_mint,
+                                ):
+                                    with patch.object(api_mod.blockchain_service, "mint_for_issuer", mint_for_issuer):
+                                        r = self.client.post(
+                                            "/api/university/certificates/submit-authorization",
+                                            json={"mint_request_id": req.id, "signature": "0xsignature"},
+                                            headers=self._uni_jwt_single_mint(user),
+                                        )
+
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        self.assertTrue((r.get_json() or {}).get("idempotent"))
+        mint_for_issuer.assert_not_called()
+        db.session.refresh(req)
+        self.assertEqual(req.status, "minted")
+        self.assertEqual(req.minter_tx_hash, existing_mint["tx_hash"])
+        rec = CertificateRecord.query.filter_by(cert_id=req.cert_id).first()
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.token_id, 77)
+        self._cleanup_mint_fixtures()
+
+    def test_batch_execute_reconciles_existing_onchain_cert_without_remint(self) -> None:
+        import json
+
+        import app.mint_batch_routes as batch_mod
+
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        batch = MintBatch(
+            university_id=uni.id,
+            status="authorized",
+            original_filename="retry.csv",
+            created_by_user_id=user.id,
+            total_rows=1,
+            valid_rows=1,
+            invalid_rows=0,
+            authorized_signature_hex="0xsig",
+        )
+        db.session.add(batch)
+        db.session.flush()
+        row = MintBatchRow(
+            batch_id=batch.id,
+            row_index=0,
+            cert_id="CERT-BATCH-RETRY-1",
+            student_internal_id="S1",
+            student_email="student@example.edu",
+            student_full_name="Pat Lee",
+            degree_title="BSc",
+            issue_date="2024-06-01",
+            row_status="prepared",
+            metadata_uri="ipfs://QmRetryBatch",
+            core_hash="0x" + "c" * 64,
+            prepared_at=datetime.utcnow(),
+        )
+        db.session.add(row)
+        db.session.flush()
+        batch.authorized_payload_json = json.dumps(
+            [
+                {
+                    "row_id": row.id,
+                    "row_index": row.row_index,
+                    "cert_id": row.cert_id,
+                    "core_hash": row.core_hash,
+                    "metadata_uri": row.metadata_uri,
+                    "expected_token_id": 88,
+                }
+            ]
+        )
+        db.session.commit()
+
+        existing_mint = {
+            "token_id": 88,
+            "tx_hash": "0x" + "8" * 64,
+            "metadata_uri": row.metadata_uri,
+            "core_hash": row.core_hash,
+        }
+        mint_for_issuer = MagicMock(side_effect=AssertionError("must not mint duplicate cert_id"))
+
+        with patch.object(batch_mod.blockchain_service, "get_w3", return_value=MagicMock()):
+            with patch.object(batch_mod, "_require_contract_code", return_value=None):
+                with patch.object(batch_mod.blockchain_service, "get_contract", return_value=MagicMock()):
+                    with patch.object(batch_mod.blockchain_service, "minter_account_address", return_value="0x" + "b" * 40):
+                        with patch.object(
+                            batch_mod.blockchain_service,
+                            "find_minted_certificate_by_cert_id",
+                            return_value=existing_mint,
+                        ):
+                            with patch.object(batch_mod.blockchain_service, "mint_for_issuer", mint_for_issuer):
+                                with patch.object(batch_mod.notification_service, "notify_university_users"):
+                                    r = self.client.post(
+                                        f"/api/university/mint-batches/{batch.id}/execute",
+                                        json={"max_mints": 1},
+                                        headers=self._uni_jwt_single_mint(user),
+                                    )
+
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        mint_for_issuer.assert_not_called()
+        db.session.refresh(row)
+        self.assertEqual(row.row_status, "mint_confirmed")
+        self.assertEqual(row.token_id, 88)
+        self.assertEqual(row.tx_hash, existing_mint["tx_hash"])
+        rec = CertificateRecord.query.filter_by(cert_id=row.cert_id).first()
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec.token_id, 88)
+        data = r.get_json() or {}
+        self.assertTrue(data["minted"][0]["idempotent"])
+        self.assertEqual(data["remaining_rows"], 0)
+        self._cleanup_mint_fixtures()
 
 
 if __name__ == "__main__":

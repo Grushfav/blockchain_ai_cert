@@ -1,11 +1,9 @@
 /**
  * In `npm run dev`, empty base uses Vite's proxy → Flask :5000.
- * In production builds (`vite preview` / static hosting), there is no proxy unless configured;
- * default to Flask directly (CORS must allow the frontend origin — backend uses * for /api).
+ * In production, default to same-origin `/api`; set VITE_API_BASE only when the API
+ * is intentionally hosted on a separate origin.
  */
-const API_BASE =
-  (import.meta.env.VITE_API_BASE as string | undefined) ||
-  (import.meta.env.DEV ? "" : "http://127.0.0.1:5000");
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || "";
 
 const TOKEN_KEY = "truecert_token";
 const ROLE_KEY = "truecert_role";
@@ -51,8 +49,8 @@ export function apiPathNotFoundMessage(path: string): string {
   const p = path.startsWith("/") ? path : `/${path}`;
   return (
     `404 for ${p}. Nothing on this origin handled that URL. ` +
-    `Use npm run dev (Vite proxies /api → port 5000), npm run preview with the backend on :5000, ` +
-    `or set VITE_API_BASE at build time to your API. If you already run Flask here, restart it ` +
+    `Use npm run dev or npm run preview (Vite proxies /api → port 5000), ` +
+    `or set VITE_API_BASE at build time if your API is on a separate origin. If you already run Flask here, restart it ` +
     `so it picks up the latest routes.`
   );
 }

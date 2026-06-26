@@ -261,16 +261,45 @@ def _safe_event_logs(event: Any, *, from_block: int, to_block: int, argument_fil
     return logs
 
 
-def find_minted_token_id_by_cert_id(w3: Web3, contract: Contract, *, issuer: str, cert_id: str, from_block: int = 0) -> int | None:
-    """Scan CertificateMinted logs for an issuer and return tokenId for a cert_id (if found)."""
+def _event_get(event: Any, key: str, default: Any = None) -> Any:
+    if isinstance(event, dict):
+        return event.get(key, default)
+    return getattr(event, key, default)
+
+
+def _event_hex(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "hex"):
+        out = value.hex()
+    elif isinstance(value, bytes):
+        out = value.hex()
+    else:
+        out = str(value)
+    if out and not out.startswith("0x") and all(c in "0123456789abcdefABCDEF" for c in out):
+        out = "0x" + out
+    return out
+
+
+def find_minted_certificate_by_cert_id(
+    w3: Web3,
+    contract: Contract,
+    *,
+    issuer: str,
+    cert_id: str,
+    from_block: int = 0,
+    clamp_window: bool = True,
+) -> dict[str, Any] | None:
+    """Scan CertificateMinted logs for an issuer/cert_id and return recoverable mint details."""
     try:
         to_block = int(w3.eth.block_number)
     except Exception:
         to_block = 0
-    # Clamp scan window to reduce RPC load / rate limiting.
-    scan_window = max(10_000, int(getattr(Config, "RECONCILE_SCAN_BLOCKS", 200_000)))
-    if int(from_block) <= 0 and to_block > scan_window:
-        from_block = max(0, to_block - scan_window)
+    if clamp_window:
+        # Clamp routine scans to reduce RPC load / rate limiting.
+        scan_window = max(10_000, int(getattr(Config, "RECONCILE_SCAN_BLOCKS", 200_000)))
+        if int(from_block) <= 0 and to_block > scan_window:
+            from_block = max(0, to_block - scan_window)
     issuer_cs = Web3.to_checksum_address(issuer)
     want = str(cert_id).strip()
     try:
@@ -287,10 +316,31 @@ def find_minted_token_id_by_cert_id(w3: Web3, contract: Contract, *, issuer: str
             args = ev["args"]
             if str(args.get("certId", "")).strip() != want:
                 continue
-            return int(args.get("tokenId", 0))
+            return {
+                "token_id": int(args.get("tokenId", 0)),
+                "cert_id": str(args.get("certId", "")).strip(),
+                "issuer": str(args.get("issuer", "")).strip(),
+                "metadata_uri": str(args.get("tokenURI", "")).strip(),
+                "core_hash": _event_hex(args.get("coreHash")),
+                "tx_hash": _event_hex(_event_get(ev, "transactionHash")),
+                "block_number": _event_get(ev, "blockNumber"),
+                "log_index": _event_get(ev, "logIndex", _event_get(ev, "log_index", 0)),
+            }
         except Exception:
             continue
     return None
+
+
+def find_minted_token_id_by_cert_id(w3: Web3, contract: Contract, *, issuer: str, cert_id: str, from_block: int = 0) -> int | None:
+    """Scan CertificateMinted logs for an issuer and return tokenId for a cert_id (if found)."""
+    details = find_minted_certificate_by_cert_id(
+        w3,
+        contract,
+        issuer=issuer,
+        cert_id=cert_id,
+        from_block=from_block,
+    )
+    return int(details["token_id"]) if details else None
 
 
 def set_issuer_whitelisted(w3: Web3, contract: Contract, issuer: str, allowed: bool) -> str:
