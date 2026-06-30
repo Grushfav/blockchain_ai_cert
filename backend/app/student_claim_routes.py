@@ -145,8 +145,12 @@ def register_student_claim_routes(bp: Blueprint) -> None:
                     404,
                 )
             tid = int(cert_rec.token_id)
+            claim_cert_id = (cert_rec.cert_id or "").strip() or None
+            claim_row_id = None
         else:
             tid = int(row.token_id)
+            claim_cert_id = (row.cert_id or "").strip() or None
+            claim_row_id = row.id
         ok_chain, chain_err = blockchain_service.escrow_claim_eligibility(
             token_id=tid, issuer_wallet=uni.wallet_address
         )
@@ -163,9 +167,9 @@ def register_student_claim_routes(bp: Blueprint) -> None:
 
         rec = StudentClaimRequest(
             university_id=university_id,
-            mint_batch_row_id=row.id,
+            mint_batch_row_id=claim_row_id,
             token_id=tid,
-            cert_id=(row.cert_id or "").strip() or None,
+            cert_id=claim_cert_id,
             student_internal_id=student_internal_id.strip(),
             student_email=student_email.strip().lower(),
             wallet_address=wallet,
