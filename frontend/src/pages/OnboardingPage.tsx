@@ -218,7 +218,8 @@ export function OnboardingPage() {
                 <div className="onboarding-step__detail">
                   <ol className="onboarding-step__list onboarding-step__list--ordered">
                     <li>
-                      <Link to="/login">Log in</Link> with your admin account default admin email and password(email:admin@examplecom + password:change-me).
+                      <Link to="/login">Log in</Link> with the bootstrap admin account configured in the
+                      backend environment.
                     </li>
                     <li>
                       Open <Link to="/admin">Admin queue</Link>, review the pending institution, and click{" "}
