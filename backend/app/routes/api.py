@@ -1328,6 +1328,18 @@ def submit_mint_authorization():
     except Exception as e:
         return jsonify({"error": f"Mint transaction failed: {e!s}"}), 502
 
+    h = (tx_hex or "").strip()
+    if not h.startswith("0x"):
+        h = "0x" + h
+    req.status = "minted"
+    req.failure_code = None
+    req.signature_hex = signature
+    req.digest_hex = digest
+    req.minter_tx_hash = h
+    uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
+    sync_uni_eip712_watermark(uni)
+    db.session.commit()
+
     # Token ids are sequential; other mints can interleave between prepare and submit.
     # The authorization commitment does not include token_id, so accept the minted token id and reconcile the DB index.
     token_id_int = int(token_id)
@@ -1356,8 +1368,11 @@ def submit_mint_authorization():
                             {
                                 "error": (
                                     "Certificate index collision on token_id; another certificate record already "
-                                    "claims this token id. Resolve in DB or rebuild the index."
+                                    "claims this token id. The on-chain mint was recorded on the mint request; "
+                                    "resolve the certificate index before relying on index-based verification."
                                 ),
+                                "token_id": token_id_int,
+                                "tx_hash": h,
                                 "collision": {
                                     "token_id": token_id_int,
                                     "existing_cert_id": existing.cert_id,
@@ -1404,8 +1419,11 @@ def submit_mint_authorization():
                             {
                                 "error": (
                                     "Certificate index collision on token_id; another certificate record already "
-                                    "claims this token id. Resolve in DB or rebuild the index."
+                                    "claims this token id. The on-chain mint was recorded on the mint request; "
+                                    "resolve the certificate index before relying on index-based verification."
                                 ),
+                                "token_id": token_id_int,
+                                "tx_hash": h,
                                 "collision": {
                                     "token_id": token_id_int,
                                     "existing_cert_id": other_tid.cert_id,
@@ -1423,17 +1441,6 @@ def submit_mint_authorization():
             rec.signed_metadata_json = req.signed_metadata_json
             rec.student_internal_id = req.student_internal_id or rec.student_internal_id
             rec.student_email = req.student_email or rec.student_email
-    req.status = "minted"
-    req.failure_code = None
-    req.signature_hex = signature
-    req.digest_hex = digest
-    req.minter_tx_hash = tx_hex
-    uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
-    sync_uni_eip712_watermark(uni)
-
-    h = (tx_hex or "").strip()
-    if not h.startswith("0x"):
-        h = "0x" + h
     try:
         receipt = w3.eth.get_transaction_receipt(h)
         processed = contract.events.CertificateMinted().process_receipt(receipt)
