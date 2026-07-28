@@ -18,6 +18,7 @@ from flask import Blueprint, Response, current_app, jsonify, make_response, requ
 from flask_jwt_extended import create_access_token, get_jwt, jwt_required
 from web3 import Web3
 
+from app.certificate_index import reserve_prepared_certificate_record
 from app.config import Config
 from app.extensions import db
 from app.models import (
@@ -1125,18 +1126,19 @@ def prepare_mint_certificate():
     except Exception as e:
         return jsonify({"error": f"Prepare mint failed: {e!s}"}), 502
 
-    rec = CertificateRecord.query.filter_by(token_id=next_token_id).first()
-    if not rec:
-        rec = CertificateRecord(token_id=next_token_id, university_id=uni.id, ipfs_uri=metadata_uri)
-        db.session.add(rec)
-    rec.university_id = uni.id
-    rec.ipfs_uri = metadata_uri
-    rec.cert_id = metadata["cert_id"]
-    rec.core_hash = core_hash
-    rec.status = "prepared"
-    rec.signed_metadata_json = signed_json
-    rec.student_internal_id = student_internal_id
-    rec.student_email = student_email
+    try:
+        _rec, reserved_tid = reserve_prepared_certificate_record(
+            university_id=uni.id,
+            cert_id=metadata["cert_id"],
+            ipfs_uri=metadata_uri,
+            core_hash=core_hash,
+            preferred_token_id=next_token_id,
+            signed_metadata_json=signed_json,
+            student_internal_id=student_internal_id,
+            student_email=student_email,
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 409
     commitment = eip712_service.single_mint_commitment(metadata["cert_id"], core_hash)
     mint_request_id = str(uuid.uuid4())
     nonce = int(uni.eip712_single_nonce or 0)
@@ -1154,7 +1156,7 @@ def prepare_mint_certificate():
             cert_id=metadata["cert_id"],
             core_hash=core_hash,
             metadata_uri=metadata_uri,
-            expected_token_id=next_token_id,
+            expected_token_id=reserved_tid,
             student_internal_id=student_internal_id,
             student_email=student_email,
             signed_metadata_json=signed_json,
@@ -1171,7 +1173,7 @@ def prepare_mint_certificate():
             "metadata_uri": metadata_uri,
             "core_hash": core_hash,
             "cert_id": metadata["cert_id"],
-            "next_token_id_hint": next_token_id,
+            "next_token_id_hint": reserved_tid,
             "institution_name": metadata["institution_name"],
             "mint_request_id": mint_request_id,
             "eip712": eip712,
@@ -1546,16 +1548,17 @@ def prepare_reissue(old_token_id: int):
     except Exception as e:
         return jsonify({"error": f"Prepare reissue failed: {e!s}"}), 502
 
-    rec = CertificateRecord.query.filter_by(token_id=next_token_id).first()
-    if not rec:
-        rec = CertificateRecord(token_id=next_token_id, university_id=uni.id, ipfs_uri=ipfs_uri)
-        db.session.add(rec)
-    rec.university_id = uni.id
-    rec.ipfs_uri = ipfs_uri
-    rec.cert_id = metadata["cert_id"]
-    rec.core_hash = core_hash
-    rec.status = "prepared"
-    rec.supersedes_token_id = old_token_id
+    try:
+        _rec, reserved_tid = reserve_prepared_certificate_record(
+            university_id=uni.id,
+            cert_id=metadata["cert_id"],
+            ipfs_uri=ipfs_uri,
+            core_hash=core_hash,
+            preferred_token_id=next_token_id,
+            supersedes_token_id=old_token_id,
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 409
     db.session.commit()
 
     return jsonify(
@@ -1564,7 +1567,7 @@ def prepare_reissue(old_token_id: int):
             "core_hash": core_hash,
             "cert_id": metadata["cert_id"],
             "old_token_id": old_token_id,
-            "next_token_id_hint": next_token_id,
+            "next_token_id_hint": reserved_tid,
         }
     )
 
@@ -1732,6 +1735,16 @@ def _upsert_certificate_status(
             ipfs_uri=ipfs_uri or "",
         )
         db.session.add(rec)
+    else:
+        # Activity sync is filtered to this issuer's on-chain events. Always bind the
+        # index row to the syncing university so a stale prepared reservation from
+        # another tenant cannot keep the wrong university_id after status/cert_id updates.
+        if int(rec.university_id) != int(university.id):
+            other_status = (rec.status or "").lower()
+            if other_status not in ("prepared",) and cert_id and rec.cert_id and str(rec.cert_id) != str(cert_id):
+                # Do not rewrite another university's non-prepared certificate to a different cert_id.
+                return
+        rec.university_id = university.id
     if ipfs_uri:
         rec.ipfs_uri = ipfs_uri
     if core_hash:
