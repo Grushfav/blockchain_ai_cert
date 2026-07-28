@@ -15,6 +15,7 @@ from flask_jwt_extended import jwt_required
 from web3 import Web3
 from werkzeug.utils import secure_filename
 
+from app.certificate_index import reserve_prepared_certificate_record
 from app.config import Config
 from app.extensions import db
 from app.models import ActivityLog, CertificateRecord, MintBatch, MintBatchRow, University, User
@@ -552,17 +553,14 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                         return jsonify({"error": cfg_err}), 503
                     contract = blockchain_service.get_contract(w3)
                     next_token_id = int(contract.functions.nextTokenId().call())
-                    rec2 = CertificateRecord.query.filter_by(token_id=next_token_id).first()
-                    if not rec2:
-                        rec2 = CertificateRecord(token_id=next_token_id, university_id=uni.id, ipfs_uri=row.metadata_uri)
-                        db.session.add(rec2)
-                    rec2.university_id = uni.id
-                    rec2.ipfs_uri = row.metadata_uri
-                    rec2.cert_id = row.cert_id
-                    rec2.core_hash = row.core_hash
-                    rec2.status = "prepared"
+                    _rec2, tid = reserve_prepared_certificate_record(
+                        university_id=uni.id,
+                        cert_id=row.cert_id,
+                        ipfs_uri=row.metadata_uri or "",
+                        core_hash=row.core_hash,
+                        preferred_token_id=next_token_id,
+                    )
                     db.session.commit()
-                    tid = next_token_id
                 except Exception:
                     # fall back to returning idempotent response without hint
                     tid = None
@@ -610,15 +608,16 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         except Exception as e:
             return jsonify({"error": f"Prepare failed: {e!s}"}), 502
 
-        rec = CertificateRecord.query.filter_by(token_id=next_token_id).first()
-        if not rec:
-            rec = CertificateRecord(token_id=next_token_id, university_id=uni.id, ipfs_uri=ipfs_uri)
-            db.session.add(rec)
-        rec.university_id = uni.id
-        rec.ipfs_uri = ipfs_uri
-        rec.cert_id = metadata["cert_id"]
-        rec.core_hash = core_hash
-        rec.status = "prepared"
+        try:
+            _rec, reserved_tid = reserve_prepared_certificate_record(
+                university_id=uni.id,
+                cert_id=metadata["cert_id"],
+                ipfs_uri=ipfs_uri,
+                core_hash=core_hash,
+                preferred_token_id=next_token_id,
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 409
 
         row.metadata_uri = ipfs_uri
         row.core_hash = core_hash
@@ -636,7 +635,7 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 "metadata_uri": ipfs_uri,
                 "core_hash": core_hash,
                 "cert_id": metadata["cert_id"],
-                "next_token_id_hint": next_token_id,
+                "next_token_id_hint": reserved_tid,
                 "idempotent": False,
             }
         )

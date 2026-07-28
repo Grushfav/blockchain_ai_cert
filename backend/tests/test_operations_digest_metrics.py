@@ -288,6 +288,200 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
 
+    def test_prepare_reservation_skips_occupied_token_ids(self) -> None:
+        from app.certificate_index import reserve_prepared_certificate_record
+
+        self._cleanup_mint_fixtures()
+        uni, _user = self._seed_verified_university_single_mint()
+        occupied = CertificateRecord(
+            token_id=10,
+            university_id=uni.id,
+            cert_id="CERT-OCCUPIED",
+            ipfs_uri="ipfs://occupied",
+            core_hash="0x" + "a" * 64,
+            status="issued",
+        )
+        db.session.add(occupied)
+        db.session.commit()
+
+        try:
+            rec, tid = reserve_prepared_certificate_record(
+                university_id=uni.id,
+                cert_id="CERT-NEW",
+                ipfs_uri="ipfs://new",
+                core_hash="0x" + "b" * 64,
+                preferred_token_id=10,
+            )
+            db.session.commit()
+            self.assertEqual(tid, 11)
+            self.assertEqual(rec.token_id, 11)
+            self.assertEqual(rec.cert_id, "CERT-NEW")
+            self.assertEqual(rec.status, "prepared")
+            kept = CertificateRecord.query.filter_by(token_id=10).one()
+            self.assertEqual(kept.cert_id, "CERT-OCCUPIED")
+            self.assertEqual(kept.status, "issued")
+        finally:
+            self._cleanup_mint_fixtures()
+
+    def test_prepare_reservation_does_not_clobber_other_university(self) -> None:
+        from app.certificate_index import reserve_prepared_certificate_record
+
+        self._cleanup_mint_fixtures()
+        uni_a, _ = self._seed_verified_university_single_mint()
+        uni_b = University(
+            name="Other Uni",
+            internal_id="other-uni-prepare",
+            domain_email="other.edu",
+            wallet_address="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+            status="verified",
+            institution_contact_email="r@other.edu",
+            institution_contact_phone="+10000000001",
+            institution_website="https://other.edu",
+            institution_license_id="LIC-2",
+            institution_license_authority="Board",
+            institution_license_valid_until="2035-12-31",
+        )
+        db.session.add(uni_b)
+        db.session.flush()
+        db.session.add(
+            CertificateRecord(
+                token_id=5,
+                university_id=uni_a.id,
+                cert_id="CERT-A-PREP",
+                ipfs_uri="ipfs://a",
+                status="prepared",
+            )
+        )
+        db.session.commit()
+
+        try:
+            rec, tid = reserve_prepared_certificate_record(
+                university_id=uni_b.id,
+                cert_id="CERT-B-PREP",
+                ipfs_uri="ipfs://b",
+                core_hash="0x" + "c" * 64,
+                preferred_token_id=5,
+            )
+            db.session.commit()
+            self.assertEqual(tid, 6)
+            self.assertEqual(rec.university_id, uni_b.id)
+            kept = CertificateRecord.query.filter_by(cert_id="CERT-A-PREP").one()
+            self.assertEqual(kept.token_id, 5)
+            self.assertEqual(kept.university_id, uni_a.id)
+        finally:
+            CertificateRecord.query.filter(
+                CertificateRecord.cert_id.in_(["CERT-A-PREP", "CERT-B-PREP"])
+            ).delete(synchronize_session=False)
+            University.query.filter_by(internal_id="other-uni-prepare").delete(synchronize_session=False)
+            db.session.commit()
+            self._cleanup_mint_fixtures()
+
+    def test_activity_upsert_rebinds_stale_foreign_prepare(self) -> None:
+        from app.routes import api as api_mod
+
+        self._cleanup_mint_fixtures()
+        uni_a, _ = self._seed_verified_university_single_mint()
+        uni_b = University(
+            name="Sync Uni B",
+            internal_id="sync-uni-b",
+            domain_email="syncb.edu",
+            wallet_address="0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+            status="verified",
+            institution_contact_email="r@syncb.edu",
+            institution_contact_phone="+10000000002",
+            institution_website="https://syncb.edu",
+            institution_license_id="LIC-3",
+            institution_license_authority="Board",
+            institution_license_valid_until="2035-12-31",
+        )
+        db.session.add(uni_b)
+        db.session.flush()
+        db.session.add(
+            CertificateRecord(
+                token_id=42,
+                university_id=uni_a.id,
+                cert_id="CERT-STALE-PREP",
+                ipfs_uri="ipfs://stale",
+                status="prepared",
+            )
+        )
+        db.session.commit()
+
+        try:
+            api_mod._upsert_certificate_status(
+                university=uni_b,
+                token_id=42,
+                ipfs_uri="ipfs://minted-b",
+                core_hash="0x" + "d" * 64,
+                cert_id="CERT-B-MINTED",
+                status="issued",
+            )
+            db.session.commit()
+            rec = CertificateRecord.query.filter_by(token_id=42).one()
+            self.assertEqual(rec.university_id, uni_b.id)
+            self.assertEqual(rec.cert_id, "CERT-B-MINTED")
+            self.assertEqual(rec.status, "issued")
+            self.assertEqual(rec.ipfs_uri, "ipfs://minted-b")
+        finally:
+            CertificateRecord.query.filter(
+                CertificateRecord.cert_id.in_(["CERT-STALE-PREP", "CERT-B-MINTED"])
+            ).delete(synchronize_session=False)
+            University.query.filter_by(internal_id="sync-uni-b").delete(synchronize_session=False)
+            db.session.commit()
+            self._cleanup_mint_fixtures()
+
+    def test_activity_upsert_does_not_rewrite_foreign_issued_cert(self) -> None:
+        from app.routes import api as api_mod
+
+        self._cleanup_mint_fixtures()
+        uni_a, _ = self._seed_verified_university_single_mint()
+        uni_b = University(
+            name="Sync Uni C",
+            internal_id="sync-uni-c",
+            domain_email="syncc.edu",
+            wallet_address="0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+            status="verified",
+            institution_contact_email="r@syncc.edu",
+            institution_contact_phone="+10000000003",
+            institution_website="https://syncc.edu",
+            institution_license_id="LIC-4",
+            institution_license_authority="Board",
+            institution_license_valid_until="2035-12-31",
+        )
+        db.session.add(uni_b)
+        db.session.flush()
+        db.session.add(
+            CertificateRecord(
+                token_id=99,
+                university_id=uni_a.id,
+                cert_id="CERT-A-ISSUED",
+                ipfs_uri="ipfs://a-issued",
+                status="issued",
+            )
+        )
+        db.session.commit()
+
+        try:
+            api_mod._upsert_certificate_status(
+                university=uni_b,
+                token_id=99,
+                ipfs_uri="ipfs://b-attempt",
+                cert_id="CERT-B-ATTEMPT",
+                status="issued",
+            )
+            db.session.commit()
+            rec = CertificateRecord.query.filter_by(token_id=99).one()
+            self.assertEqual(rec.university_id, uni_a.id)
+            self.assertEqual(rec.cert_id, "CERT-A-ISSUED")
+            self.assertEqual(rec.ipfs_uri, "ipfs://a-issued")
+        finally:
+            CertificateRecord.query.filter(
+                CertificateRecord.cert_id.in_(["CERT-A-ISSUED", "CERT-B-ATTEMPT"])
+            ).delete(synchronize_session=False)
+            University.query.filter_by(internal_id="sync-uni-c").delete(synchronize_session=False)
+            db.session.commit()
+            self._cleanup_mint_fixtures()
+
 
 if __name__ == "__main__":
     unittest.main()
