@@ -7,7 +7,15 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -158,6 +166,16 @@ class OperationsDigestMetricsTests(unittest.TestCase):
         University.query.filter_by(internal_id="single-mint-test-uni").delete(synchronize_session=False)
         db.session.commit()
 
+    def _cleanup_batch_mint_fixtures(self) -> None:
+        for batch in MintBatch.query.filter_by(original_filename="batch-race.csv").all():
+            db.session.delete(batch)
+        CertificateRecord.query.filter(CertificateRecord.cert_id.in_(["CERT-BATCH-RACE"])).delete(
+            synchronize_session=False
+        )
+        User.query.filter(User.email == "batchrace@example.edu").delete(synchronize_session=False)
+        University.query.filter_by(internal_id="batch-race-uni").delete(synchronize_session=False)
+        db.session.commit()
+
     def _seed_verified_university_single_mint(self) -> tuple[University, User]:
         uni = University(
             name="Single Mint Uni",
@@ -200,6 +218,197 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             "issue_date": "2020-01-01",
         }
         self.assertTrue(api_mod._core_hash_hex(meta).startswith("0x"))
+
+    def test_concurrent_submit_claims_request_before_mint(self) -> None:
+        """Second submit during mint_for_issuer must 409 without a second on-chain mint."""
+        import time
+
+        import app.routes.api as api_mod
+
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        req = MintAuthorizationRequest(
+            id="mint-race-submit",
+            university_id=uni.id,
+            cert_id="CERT-RACE-SINGLE",
+            core_hash="0x" + "c" * 64,
+            metadata_uri="ipfs://race-single",
+            expected_token_id=1,
+            commitment_hex="0x" + "d" * 64,
+            nonce_snapshot=0,
+            expiry_unix=int(time.time()) + 3600,
+            status="pending",
+        )
+        db.session.add(req)
+        db.session.commit()
+
+        headers = self._uni_jwt_single_mint(user)
+        mint_calls = {"n": 0}
+        nested_status = {"code": None}
+
+        def mint_side_effect(*_a, **_k):
+            mint_calls["n"] += 1
+            if mint_calls["n"] == 1:
+                nested = self.client.post(
+                    "/api/university/certificates/submit-authorization",
+                    json={"mint_request_id": req.id, "signature": "0x" + "ab" * 65},
+                    headers=headers,
+                )
+                nested_status["code"] = nested.status_code
+                self.assertEqual(nested.status_code, 409, nested.get_data(as_text=True))
+            return (88, "0x" + "a" * 64)
+
+        contract = MagicMock()
+        contract.functions.mintForIssuer = MagicMock()
+        contract.functions.minter.return_value.call.return_value = (
+            "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+        )
+        contract.functions.whitelistedIssuers.return_value.call.return_value = True
+        contract.events.CertificateMinted.return_value.process_receipt.return_value = []
+
+        try:
+            with patch.object(api_mod, "_require_contract_code", return_value=None), patch.object(
+                api_mod.blockchain_service, "get_w3", return_value=MagicMock()
+            ), patch.object(api_mod.blockchain_service, "get_contract", return_value=contract), patch.object(
+                api_mod.blockchain_service,
+                "minter_account_address",
+                return_value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+            ), patch.object(
+                api_mod.eip712_service,
+                "recover_typed_data_signer",
+                return_value=uni.wallet_address,
+            ), patch.object(
+                api_mod.eip712_service, "typed_data_signable_hash_hex", return_value="0x" + "e" * 64
+            ), patch.object(api_mod.blockchain_service, "mint_for_issuer", side_effect=mint_side_effect):
+                r1 = self.client.post(
+                    "/api/university/certificates/submit-authorization",
+                    json={"mint_request_id": req.id, "signature": "0x" + "ab" * 65},
+                    headers=headers,
+                )
+            self.assertEqual(r1.status_code, 200, r1.get_data(as_text=True))
+            self.assertEqual(mint_calls["n"], 1)
+            self.assertEqual(nested_status["code"], 409)
+            db.session.expire_all()
+            persisted = db.session.get(MintAuthorizationRequest, req.id)
+            self.assertEqual(persisted.status, "minted")
+            self.assertEqual(persisted.minter_tx_hash, "0x" + "a" * 64)
+        finally:
+            self._cleanup_mint_fixtures()
+
+    def test_batch_execute_claims_row_before_mint(self) -> None:
+        """Concurrent execute must not call mint_for_issuer twice for the same prepared row."""
+        import json
+
+        import app.mint_batch_routes as batch_routes
+
+        self._cleanup_batch_mint_fixtures()
+        uni = University(
+            name="Batch Race Uni",
+            internal_id="batch-race-uni",
+            domain_email="example.edu",
+            wallet_address="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            status="verified",
+            institution_contact_email="registrar@example.edu",
+            institution_contact_phone="+10000000000",
+            institution_website="https://example.edu",
+            institution_license_id="LIC-1",
+            institution_license_authority="Board",
+            institution_license_valid_until="2035-12-31",
+        )
+        db.session.add(uni)
+        db.session.flush()
+        user = User(email="batchrace@example.edu", role="university", university_id=uni.id)
+        user.set_password("testpass123")
+        db.session.add(user)
+        db.session.flush()
+        batch = MintBatch(
+            university_id=uni.id,
+            status="authorized",
+            original_filename="batch-race.csv",
+            created_by_user_id=user.id,
+            total_rows=1,
+            valid_rows=1,
+            invalid_rows=0,
+            authorized_signature_hex="0xsig",
+        )
+        db.session.add(batch)
+        db.session.flush()
+        row = MintBatchRow(
+            batch_id=batch.id,
+            row_index=0,
+            cert_id="CERT-BATCH-RACE",
+            student_internal_id="SID-1",
+            student_email="student@example.edu",
+            student_full_name="Pat Lee",
+            degree_title="BSc",
+            issue_date="2024-06-01",
+            row_status="prepared",
+            metadata_uri="ipfs://metadata",
+            core_hash="0x" + "a" * 64,
+            prepared_at=datetime.utcnow(),
+        )
+        db.session.add(row)
+        db.session.flush()
+        batch.authorized_payload_json = json.dumps(
+            [
+                {
+                    "row_id": row.id,
+                    "row_index": row.row_index,
+                    "cert_id": row.cert_id,
+                    "core_hash": row.core_hash,
+                    "metadata_uri": row.metadata_uri,
+                    "expected_token_id": 1,
+                }
+            ]
+        )
+        db.session.commit()
+
+        headers = self._uni_jwt_single_mint(user)
+        mint_calls = {"n": 0}
+        nested_code = {"code": None}
+
+        def mint_side_effect(*_a, **_k):
+            mint_calls["n"] += 1
+            if mint_calls["n"] == 1:
+                nested = self.client.post(
+                    f"/api/university/mint-batches/{batch.id}/execute",
+                    json={"max_mints": 1},
+                    headers=headers,
+                )
+                nested_code["code"] = nested.status_code
+                # Second worker should skip the claimed row and finish with no new mints.
+                self.assertEqual(nested.status_code, 200, nested.get_data(as_text=True))
+                self.assertEqual((nested.get_json() or {}).get("minted"), [])
+            return (91, "0x" + "b" * 64)
+
+        try:
+            with patch.object(batch_routes, "_require_contract_code", return_value=None), patch.object(
+                batch_routes.blockchain_service, "get_w3", return_value=MagicMock()
+            ), patch.object(
+                batch_routes.blockchain_service, "get_contract", return_value=MagicMock()
+            ), patch.object(
+                batch_routes.blockchain_service,
+                "minter_account_address",
+                return_value="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+            ), patch.object(
+                batch_routes.blockchain_service, "mint_for_issuer", side_effect=mint_side_effect
+            ), patch.object(
+                batch_routes, "_verify_certificate_mint_receipt", return_value=(True, "")
+            ):
+                r1 = self.client.post(
+                    f"/api/university/mint-batches/{batch.id}/execute",
+                    json={"max_mints": 1},
+                    headers=headers,
+                )
+            self.assertEqual(r1.status_code, 200, r1.get_data(as_text=True))
+            self.assertEqual(mint_calls["n"], 1)
+            self.assertEqual(nested_code["code"], 200)
+            db.session.expire_all()
+            persisted = db.session.get(MintBatchRow, row.id)
+            self.assertEqual(persisted.row_status, "mint_confirmed")
+            self.assertEqual(persisted.token_id, 91)
+        finally:
+            self._cleanup_batch_mint_fixtures()
 
     def test_prepare_single_mint_invalid_email_400(self) -> None:
         self._cleanup_mint_fixtures()

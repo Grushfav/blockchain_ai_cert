@@ -1315,6 +1315,27 @@ def submit_mint_authorization():
                     cr.ipfs_uri = mint_uri
             db.session.flush()
 
+    # Claim the request before any chain I/O so a concurrent submit cannot also mint.
+    # UPDATE … WHERE status='pending' is atomic even without SELECT FOR UPDATE.
+    claimed = (
+        MintAuthorizationRequest.query.filter_by(id=mint_request_id, status="pending").update(
+            {
+                "status": "submitting",
+                "signature_hex": signature,
+                "digest_hex": digest,
+                "failure_code": None,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.session.commit()
+    if claimed != 1:
+        db.session.expire(req)
+        current = db.session.get(MintAuthorizationRequest, mint_request_id)
+        already = (current.status if current else None) or "processed"
+        return jsonify({"error": f"Mint request already {already}"}), 409
+    db.session.refresh(req)
+
     chain_t0 = time.perf_counter()
     try:
         token_id, tx_hex = blockchain_service.mint_for_issuer(
@@ -1326,7 +1347,25 @@ def submit_mint_authorization():
             req.cert_id,
         )
     except Exception as e:
+        # Transient RPC/gas failures should allow a clean retry of the same authorization.
+        req.status = "pending"
+        req.failure_code = "mint_tx_failed"
+        db.session.commit()
         return jsonify({"error": f"Mint transaction failed: {e!s}"}), 502
+
+    h = (tx_hex or "").strip()
+    if not h.startswith("0x"):
+        h = "0x" + h
+    # Record the mint on the authorization request before index reconciliation so a collision
+    # response cannot leave status as "submitting"/"pending" and invite a remint.
+    req.status = "minted"
+    req.failure_code = None
+    req.signature_hex = signature
+    req.digest_hex = digest
+    req.minter_tx_hash = h
+    uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
+    sync_uni_eip712_watermark(uni)
+    db.session.commit()
 
     # Token ids are sequential; other mints can interleave between prepare and submit.
     # The authorization commitment does not include token_id, so accept the minted token id and reconcile the DB index.
@@ -1356,8 +1395,11 @@ def submit_mint_authorization():
                             {
                                 "error": (
                                     "Certificate index collision on token_id; another certificate record already "
-                                    "claims this token id. Resolve in DB or rebuild the index."
+                                    "claims this token id. The on-chain mint was recorded on the mint request; "
+                                    "resolve the certificate index before relying on index-based verification."
                                 ),
+                                "token_id": token_id_int,
+                                "tx_hash": h,
                                 "collision": {
                                     "token_id": token_id_int,
                                     "existing_cert_id": existing.cert_id,
@@ -1404,8 +1446,11 @@ def submit_mint_authorization():
                             {
                                 "error": (
                                     "Certificate index collision on token_id; another certificate record already "
-                                    "claims this token id. Resolve in DB or rebuild the index."
+                                    "claims this token id. The on-chain mint was recorded on the mint request; "
+                                    "resolve the certificate index before relying on index-based verification."
                                 ),
+                                "token_id": token_id_int,
+                                "tx_hash": h,
                                 "collision": {
                                     "token_id": token_id_int,
                                     "existing_cert_id": other_tid.cert_id,
@@ -1423,17 +1468,6 @@ def submit_mint_authorization():
             rec.signed_metadata_json = req.signed_metadata_json
             rec.student_internal_id = req.student_internal_id or rec.student_internal_id
             rec.student_email = req.student_email or rec.student_email
-    req.status = "minted"
-    req.failure_code = None
-    req.signature_hex = signature
-    req.digest_hex = digest
-    req.minter_tx_hash = tx_hex
-    uni.eip712_single_nonce = int(uni.eip712_single_nonce or 0) + 1
-    sync_uni_eip712_watermark(uni)
-
-    h = (tx_hex or "").strip()
-    if not h.startswith("0x"):
-        h = "0x" + h
     try:
         receipt = w3.eth.get_transaction_receipt(h)
         processed = contract.events.CertificateMinted().process_receipt(receipt)
@@ -1495,13 +1529,13 @@ def submit_mint_authorization():
         kind="mint_success",
         title="Certificate minted successfully",
         body=f"Certificate {req.cert_id} minted on-chain as token #{int(token_id)}.",
-        payload={"token_id": int(token_id), "cert_id": req.cert_id, "tx_hash": tx_hex},
+        payload={"token_id": int(token_id), "cert_id": req.cert_id, "tx_hash": h},
     )
     db.session.commit()
     return jsonify(
         {
             "token_id": int(token_id),
-            "tx_hash": tx_hex,
+            "tx_hash": h,
             "mint_request_id": mint_request_id,
             "eip712_digest": digest,
             "timing": {
