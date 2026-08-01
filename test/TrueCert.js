@@ -79,6 +79,48 @@ describe("TrueCert", function () {
     expect(await c.valid(2n)).to.equal(true);
   });
 
+  it("cannot revokeAndReissue the same old token twice", async function () {
+    const { c, uni, platform } = await deploy();
+    await c
+      .connect(platform)
+      .mintForIssuer(uni.address, "ipfs://old", ethers.keccak256(ethers.toUtf8Bytes("core-old")), "CERT-OLD");
+    await c
+      .connect(uni)
+      .revokeAndReissue(
+        1n,
+        "ipfs://new",
+        ethers.keccak256(ethers.toUtf8Bytes("core-new")),
+        "CERT-NEW"
+      );
+    await expect(
+      c.connect(uni).revokeAndReissue(
+        1n,
+        "ipfs://again",
+        ethers.keccak256(ethers.toUtf8Bytes("core-again")),
+        "CERT-AGAIN"
+      )
+    ).to.be.revertedWithCustomError(c, "InvalidToken");
+    expect(await c.nextTokenId()).to.equal(3n);
+  });
+
+  it("de-whitelisted issuer cannot revokeAndReissue", async function () {
+    const { c, uni, platform, admin } = await deploy();
+    await c
+      .connect(platform)
+      .mintForIssuer(uni.address, "ipfs://old", ethers.keccak256(ethers.toUtf8Bytes("core-old")), "CERT-OLD");
+    await c.connect(admin).setIssuerWhitelisted(uni.address, false);
+    await expect(
+      c.connect(uni).revokeAndReissue(
+        1n,
+        "ipfs://new",
+        ethers.keccak256(ethers.toUtf8Bytes("core-new")),
+        "CERT-NEW"
+      )
+    ).to.be.revertedWithCustomError(c, "NotWhitelistedIssuer");
+    expect(await c.valid(1n)).to.equal(true);
+    expect(await c.nextTokenId()).to.equal(2n);
+  });
+
   it("minter cannot mint for non-whitelisted issuer", async function () {
     const { c, other, platform, admin } = await deploy();
     const coreHash = ethers.keccak256(ethers.toUtf8Bytes("x"));
