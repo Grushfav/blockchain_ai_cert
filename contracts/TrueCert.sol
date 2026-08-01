@@ -130,6 +130,9 @@ contract TrueCert is ERC721, ERC721URIStorage, Ownable {
 
     /**
      * @notice Revoke old token and issue corrected token with fresh metadata.
+     * @dev Issuer must still be whitelisted (same gate as {mintForIssuer}). The old token
+     *      must still be valid so a single revoked id cannot be reissued repeatedly to mint
+     *      unbounded replacements without platform mint controls.
      */
     function revokeAndReissue(
         uint256 oldTokenId,
@@ -140,6 +143,8 @@ contract TrueCert is ERC721, ERC721URIStorage, Ownable {
         address issuer = issuerOf[oldTokenId];
         if (issuer == address(0)) revert InvalidToken();
         if (msg.sender != issuer) revert NotIssuer();
+        if (!whitelistedIssuers[msg.sender]) revert NotWhitelistedIssuer();
+        if (!valid[oldTokenId]) revert InvalidToken();
         valid[oldTokenId] = false;
         emit CertificateRevoked(oldTokenId);
 
