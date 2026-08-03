@@ -35,6 +35,9 @@ contract TrueCert is ERC721, ERC721URIStorage, Ownable {
     /// @notice Platform hot wallet that may call {mintForIssuer}. Set by owner.
     address public minter;
 
+    /// @dev True only while {claim} is executing `_transfer`, so plain ERC-721 transfers cannot move unlocked escrow.
+    bool private _claimInProgress;
+
     event IssuerWhitelisted(address indexed issuer);
     event IssuerRemoved(address indexed issuer);
     event CertificateMinted(
@@ -94,13 +97,17 @@ contract TrueCert is ERC721, ERC721URIStorage, Ownable {
 
     /**
      * @notice Student provides a wallet; university moves the token and locks it (soulbound).
+     * @dev Escrow → student transfers must go through this function. Plain `transferFrom` /
+     *      `safeTransferFrom` on an unlocked token are rejected in {_update}.
      */
     function claim(uint256 tokenId, address student) external {
         address issuer = issuerOf[tokenId];
         if (issuer == address(0)) revert InvalidToken();
         if (ownerOf(tokenId) != msg.sender) revert InvalidToken();
         if (locked[tokenId]) revert Soulbound();
+        _claimInProgress = true;
         _transfer(msg.sender, student, tokenId);
+        _claimInProgress = false;
         locked[tokenId] = true;
         emit CertificateClaimed(tokenId, msg.sender, student);
     }
@@ -164,6 +171,8 @@ contract TrueCert is ERC721, ERC721URIStorage, Ownable {
         if (from != address(0) && to != address(0)) {
             if (!valid[tokenId]) revert InvalidToken();
             if (locked[tokenId]) revert Soulbound();
+            // Unlocked escrow may only move via {claim}; otherwise credentials stay tradable forever.
+            if (!_claimInProgress) revert Soulbound();
         }
         return super._update(to, tokenId, auth);
     }

@@ -37,6 +37,28 @@ describe("TrueCert", function () {
     await expect(c.connect(student).transferFrom(student.address, other.address, 1n)).to.be.reverted;
   });
 
+  it("rejects plain transferFrom on unlocked escrow (claim-only path)", async function () {
+    const { c, uni, student, other, platform } = await deploy();
+    await c
+      .connect(platform)
+      .mintForIssuer(uni.address, "ipfs://escrow", ethers.keccak256(ethers.toUtf8Bytes("core-escrow")), "CERT-ESCROW");
+    expect(await c.locked(1n)).to.equal(false);
+
+    await expect(
+      c.connect(uni).transferFrom(uni.address, other.address, 1n)
+    ).to.be.revertedWithCustomError(c, "Soulbound");
+    await expect(
+      c.connect(uni)["safeTransferFrom(address,address,uint256)"](uni.address, student.address, 1n)
+    ).to.be.revertedWithCustomError(c, "Soulbound");
+
+    expect(await c.ownerOf(1n)).to.equal(uni.address);
+    expect(await c.locked(1n)).to.equal(false);
+
+    await c.connect(uni).claim(1n, student.address);
+    expect(await c.ownerOf(1n)).to.equal(student.address);
+    expect(await c.locked(1n)).to.equal(true);
+  });
+
   it("revokes and blocks transfers", async function () {
     const { c, uni, student, platform } = await deploy();
     await c
