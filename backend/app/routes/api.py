@@ -113,6 +113,68 @@ def _ipfs_uri_to_gateway(uri: str) -> str:
     return u
 
 
+def _metadata_fetch_allowlist_prefixes() -> list[str]:
+    """First-party / configured hosts that may be fetched for off-chain metadata."""
+    prefixes: list[str] = []
+    pinata = (Config.PINATA_GATEWAY_BASE or "").strip().rstrip("/")
+    if pinata:
+        prefixes.append(pinata)
+    # Hard-coded fallback used by legacy _ipfs_uri_to_http.
+    prefixes.append("https://gateway.pinata.cloud/ipfs")
+    pub = (Config.PUBLIC_METADATA_BASE_URL or "").strip().rstrip("/")
+    if pub:
+        prefixes.append(pub)
+    # De-dupe while preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in prefixes:
+        key = p.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _url_is_allowlisted_metadata_fetch(url: str) -> bool:
+    u = (url or "").strip()
+    if not u.startswith("http://") and not u.startswith("https://"):
+        return False
+    for prefix in _metadata_fetch_allowlist_prefixes():
+        if u == prefix or u.startswith(prefix + "/"):
+            return True
+    return False
+
+
+def _resolve_safe_metadata_fetch_url(uri: str) -> str:
+    """
+    Map an on-chain / stored metadata URI to an HTTP(S) URL that is safe to fetch server-side.
+
+    Arbitrary HTTP(S) tokenURIs are rejected to prevent SSRF via public verify endpoints
+    (e.g. after an issuer sets a malicious URI with revokeAndReissue).
+    """
+    u = (uri or "").strip()
+    if not u:
+        raise ValueError("empty metadata URI")
+    if u.startswith("ipfs://"):
+        rest = u[len("ipfs://") :]
+        cid = rest.split("/")[0].strip()
+        if not cid or any(ch in cid for ch in (".", ":", "@")):
+            raise ValueError("invalid ipfs CID in metadata URI")
+        suffix = rest[len(cid) :]  # may include /path
+        base = (Config.PINATA_GATEWAY_BASE or "https://gateway.pinata.cloud/ipfs").rstrip("/")
+        return f"{base}/{cid}{suffix}"
+    if u.startswith("http://") or u.startswith("https://"):
+        parsed = urlparse(u)
+        host = (parsed.hostname or "").lower()
+        if not host or host in {"localhost", "127.0.0.1", "::1"} or host.endswith(".local"):
+            raise ValueError("metadata URI host is not allowlisted")
+        if not _url_is_allowlisted_metadata_fetch(u):
+            raise ValueError("metadata URI host is not allowlisted")
+        return u
+    raise ValueError("unsupported metadata URI scheme")
+
+
 def _normalize_action(action: str | None) -> str:
     if not action:
         return "issued"
@@ -1043,10 +1105,8 @@ def _public_single_mint_metadata_url(token_id: int) -> str:
 
 
 def _http_url_for_metadata_fetch(uri: str) -> str:
-    u = (uri or "").strip()
-    if u.startswith("http://") or u.startswith("https://"):
-        return u
-    return _ipfs_uri_to_http(u)
+    """Resolve URI to an allowlisted HTTP(S) URL for server-side metadata fetch."""
+    return _resolve_safe_metadata_fetch_url(uri)
 
 
 def _offchain_metadata_from_certificate_record(rec: CertificateRecord) -> dict[str, Any] | None:
@@ -1065,7 +1125,11 @@ def _offchain_metadata_from_certificate_record(rec: CertificateRecord) -> dict[s
 
 
 def _fetch_offchain_metadata_from_uri(uri: str) -> dict[str, Any]:
-    r = requests.get(_http_url_for_metadata_fetch(uri), timeout=30)
+    url = _resolve_safe_metadata_fetch_url(uri)
+    # No redirects: an allowlisted host must not bounce the worker onto an internal target.
+    r = requests.get(url, timeout=30, allow_redirects=False)
+    if r.is_redirect or r.status_code in {301, 302, 303, 307, 308}:
+        raise ValueError("metadata fetch redirects are not allowed")
     r.raise_for_status()
     data = r.json()
     if not isinstance(data, dict):
@@ -2021,7 +2085,12 @@ def verify_token(token_id: int):
 
     uri = onchain.get("metadata_uri") or ""
     offchain: dict[str, Any] | None = None
-    if uri:
+    # Prefer indexed signed metadata so verify does not need to hit arbitrary tokenURIs.
+    rec = CertificateRecord.query.filter_by(token_id=int(token_id)).first()
+    from_db = _offchain_metadata_from_certificate_record(rec) if rec else None
+    if from_db is not None:
+        offchain = from_db
+    elif uri:
         try:
             offchain = _fetch_offchain_metadata_from_uri(uri)
         except Exception as e:

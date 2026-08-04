@@ -218,6 +218,73 @@ class OperationsDigestMetricsTests(unittest.TestCase):
         self.assertIn("email", (r.get_json() or {}).get("error", "").lower())
         self._cleanup_mint_fixtures()
 
+    def test_resolve_safe_metadata_fetch_url_blocks_ssrf_targets(self) -> None:
+        """Public verify must not fetch arbitrary on-chain HTTP(S) tokenURIs (SSRF)."""
+        import app.config as app_config
+        from app.routes import api as api_mod
+
+        orig_pub = app_config.Config.PUBLIC_METADATA_BASE_URL
+        orig_gw = app_config.Config.PINATA_GATEWAY_BASE
+        app_config.Config.PUBLIC_METADATA_BASE_URL = "https://api.example.com"
+        app_config.Config.PINATA_GATEWAY_BASE = "https://gateway.pinata.cloud/ipfs"
+        try:
+            ipfs_url = api_mod._resolve_safe_metadata_fetch_url("ipfs://QmAbc123")
+            self.assertEqual(ipfs_url, "https://gateway.pinata.cloud/ipfs/QmAbc123")
+
+            legacy = api_mod._resolve_safe_metadata_fetch_url(
+                "https://api.example.com/api/public/metadata/9"
+            )
+            self.assertEqual(legacy, "https://api.example.com/api/public/metadata/9")
+
+            for evil in (
+                "http://169.254.169.254/latest/meta-data/",
+                "https://evil.example/steal",
+                "http://127.0.0.1:5000/api/public/metadata/1",
+                "http://localhost/admin",
+                "file:///etc/passwd",
+            ):
+                with self.assertRaises(ValueError):
+                    api_mod._resolve_safe_metadata_fetch_url(evil)
+        finally:
+            app_config.Config.PUBLIC_METADATA_BASE_URL = orig_pub
+            app_config.Config.PINATA_GATEWAY_BASE = orig_gw
+
+    def test_verify_token_rejects_arbitrary_http_token_uri_without_fetch(self) -> None:
+        """GET /verify/<id> with a malicious HTTP tokenURI must not call requests.get."""
+        import app.config as app_config
+        from app.routes import api as api_mod
+
+        orig_addr = app_config.Config.TRUECERT_CONTRACT_ADDRESS
+        app_config.Config.TRUECERT_CONTRACT_ADDRESS = "0x1111111111111111111111111111111111111111"
+        onchain = {
+            "exists": True,
+            "token_id": 77,
+            "owner_address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            "issuer_address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            "locked": False,
+            "valid": True,
+            "metadata_uri": "http://169.254.169.254/latest/meta-data/",
+            "core_hash": "0x" + "ab" * 32,
+        }
+        mock_w3 = MagicMock()
+        mock_w3.eth.get_code.return_value = b"\x01\x02"
+        mock_w3.eth.chain_id = 80002
+        try:
+            with patch.object(api_mod.blockchain_service, "get_w3", return_value=mock_w3):
+                with patch.object(api_mod.blockchain_service, "get_contract", return_value=MagicMock()):
+                    with patch.object(
+                        api_mod.blockchain_service, "read_certificate_public", return_value=onchain
+                    ):
+                        with patch.object(api_mod.requests, "get") as mock_get:
+                            r = self.client.get("/api/verify/77")
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            body = r.get_json() or {}
+            off = body.get("off_chain_metadata") or {}
+            self.assertIn("allowlisted", (off.get("_error") or "").lower())
+            mock_get.assert_not_called()
+        finally:
+            app_config.Config.TRUECERT_CONTRACT_ADDRESS = orig_addr
+
     def test_prepare_single_mint_pins_ipfs_metadata(self) -> None:
         import json
 
