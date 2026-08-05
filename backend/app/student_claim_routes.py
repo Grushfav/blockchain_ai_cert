@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from flask import Blueprint, abort, jsonify, request
 from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
@@ -55,15 +56,15 @@ def _serialize_request(r: StudentClaimRequest, *, row: MintBatchRow | None = Non
     }
 
 
-def _find_single_certificate_for_student(
+def _find_single_certificates_for_student(
     *, university_id: int, student_internal_id: str, email: str
-) -> CertificateRecord | None:
-    """Single-mint credentials stored on certificate_records (not mint_batch_rows)."""
+) -> list[CertificateRecord]:
+    """Single-mint credentials stored on certificate_records (not mint_batch_rows). Newest first."""
     sid = student_internal_id.strip()
     em = email.strip().lower()
     if not sid or not em:
-        return None
-    q = (
+        return []
+    return (
         CertificateRecord.query.filter_by(university_id=int(university_id))
         .filter(CertificateRecord.token_id.isnot(None))
         .filter(CertificateRecord.status == "issued")
@@ -72,17 +73,17 @@ def _find_single_certificate_for_student(
         .filter(func.lower(func.trim(CertificateRecord.student_email)) == em)
         .filter(func.trim(CertificateRecord.student_internal_id) == sid)
         .order_by(CertificateRecord.id.desc())
+        .all()
     )
-    rows = q.all()
-    return rows[0] if rows else None
 
 
-def _find_mint_row_for_student(*, university_id: int, student_internal_id: str, email: str) -> MintBatchRow | None:
+def _find_mint_rows_for_student(*, university_id: int, student_internal_id: str, email: str) -> list[MintBatchRow]:
+    """Batch-minted credentials ready for claim. Newest first."""
     sid = student_internal_id.strip()
     em = email.strip().lower()
     if not sid or not em:
-        return None
-    q = (
+        return []
+    return (
         MintBatchRow.query.join(MintBatch)
         .filter(MintBatch.university_id == int(university_id))
         .filter(MintBatchRow.token_id.isnot(None))
@@ -92,9 +93,48 @@ def _find_mint_row_for_student(*, university_id: int, student_internal_id: str, 
         .filter(func.lower(func.trim(MintBatchRow.student_email)) == em)
         .filter(func.trim(MintBatchRow.student_internal_id) == sid)
         .order_by(MintBatchRow.id.desc())
+        .all()
     )
-    rows = q.all()
-    return rows[0] if rows else None
+
+
+def _claim_candidates(
+    *, university_id: int, student_internal_id: str, email: str
+) -> list[tuple[int, MintBatchRow | None, str | None]]:
+    """
+    Build claimable credential candidates for a student.
+
+    Order: batch rows (newest first), then single-mint records (newest first).
+    Callers must still check on-chain eligibility and open claim requests.
+    """
+    candidates: list[tuple[int, MintBatchRow | None, str | None]] = []
+    seen: set[int] = set()
+    for row in _find_mint_rows_for_student(
+        university_id=university_id,
+        student_internal_id=student_internal_id,
+        email=email,
+    ):
+        if row.token_id is None:
+            continue
+        tid = int(row.token_id)
+        if tid in seen:
+            continue
+        seen.add(tid)
+        cert_id = (row.cert_id or "").strip() or None
+        candidates.append((tid, row, cert_id))
+    for cert_rec in _find_single_certificates_for_student(
+        university_id=university_id,
+        student_internal_id=student_internal_id,
+        email=email,
+    ):
+        if cert_rec.token_id is None:
+            continue
+        tid = int(cert_rec.token_id)
+        if tid in seen:
+            continue
+        seen.add(tid)
+        cert_id = (cert_rec.cert_id or "").strip() or None
+        candidates.append((tid, None, cert_id))
+    return candidates
 
 
 def register_student_claim_routes(bp: Blueprint) -> None:
@@ -117,55 +157,75 @@ def register_student_claim_routes(bp: Blueprint) -> None:
         except Exception:
             return ({"error": "wallet_address is invalid"}, 400)
 
+        requested_token_id: int | None = None
+        if data.get("token_id") is not None and str(data.get("token_id")).strip() != "":
+            try:
+                requested_token_id = int(data.get("token_id"))
+            except Exception:
+                return ({"error": "token_id must be an integer"}, 400)
+            if requested_token_id < 0:
+                return ({"error": "token_id must be an integer"}, 400)
+
         uni = db.session.get(University, university_id)
         if not uni or uni.status != "verified":
             return ({"error": "Institution not found or not accepting requests"}, 404)
 
-        row = _find_mint_row_for_student(
+        candidates = _claim_candidates(
             university_id=university_id,
             student_internal_id=student_internal_id,
             email=student_email,
         )
-        cert_rec: CertificateRecord | None = None
-        if not row or row.token_id is None:
-            cert_rec = _find_single_certificate_for_student(
-                university_id=university_id,
-                student_internal_id=student_internal_id,
-                email=student_email,
+        if requested_token_id is not None:
+            candidates = [c for c in candidates if c[0] == requested_token_id]
+
+        if not candidates:
+            return (
+                {
+                    "error": (
+                        "No minted credential matched that institution, student ID, and email. "
+                        "Use the same student ID and email your school used when the certificate was issued "
+                        "(single mint or batch upload)."
+                    )
+                },
+                404,
             )
-            if not cert_rec or cert_rec.token_id is None:
-                return (
-                    {
-                        "error": (
-                            "No minted credential matched that institution, student ID, and email. "
-                            "Use the same student ID and email your school used when the certificate was issued "
-                            "(single mint or batch upload)."
-                        )
-                    },
-                    404,
-                )
-            tid = int(cert_rec.token_id)
-        else:
-            tid = int(row.token_id)
-        ok_chain, chain_err = blockchain_service.escrow_claim_eligibility(
-            token_id=tid, issuer_wallet=uni.wallet_address
-        )
-        if not ok_chain:
-            return ({"error": chain_err or "This credential cannot be transferred right now."}, 400)
 
-        open_req = (
-            StudentClaimRequest.query.filter_by(university_id=university_id, token_id=tid)
-            .filter(StudentClaimRequest.status.in_(tuple(ACTIVE_STATUSES)))
-            .first()
-        )
-        if open_req:
-            return ({"error": "A claim request for this credential is already open."}, 409)
+        selected: tuple[int, MintBatchRow | None, str | None] | None = None
+        last_chain_err: str | None = None
+        saw_open_request = False
+        for tid, row, cert_id in candidates:
+            open_req = (
+                StudentClaimRequest.query.filter_by(university_id=university_id, token_id=tid)
+                .filter(StudentClaimRequest.status.in_(tuple(ACTIVE_STATUSES)))
+                .first()
+            )
+            if open_req:
+                saw_open_request = True
+                continue
+            ok_chain, chain_err = blockchain_service.escrow_claim_eligibility(
+                token_id=tid, issuer_wallet=uni.wallet_address
+            )
+            if not ok_chain:
+                last_chain_err = chain_err or "This credential cannot be transferred right now."
+                continue
+            selected = (tid, row, cert_id)
+            break
 
+        if selected is None:
+            if len(candidates) == 1 and saw_open_request and last_chain_err is None:
+                return ({"error": "A claim request for this credential is already open."}, 409)
+            if last_chain_err:
+                return ({"error": last_chain_err}, 400)
+            if saw_open_request:
+                return ({"error": "A claim request for this credential is already open."}, 409)
+            return ({"error": "This credential cannot be transferred right now."}, 400)
+
+        tid, row, cert_id = selected
         rec = StudentClaimRequest(
             university_id=university_id,
-            mint_batch_row_id=row.id,
+            mint_batch_row_id=row.id if row else None,
             token_id=tid,
-            cert_id=(row.cert_id or "").strip() or None,
+            cert_id=cert_id,
             student_internal_id=student_internal_id.strip(),
             student_email=student_email.strip().lower(),
             wallet_address=wallet,
