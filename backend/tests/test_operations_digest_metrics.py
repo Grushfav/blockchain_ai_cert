@@ -7,8 +7,17 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
-from app.services import ai_response_cache, analytics_service, gemini_service
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    StudentClaimRequest,
+    University,
+    User,
+)
+from app.services import ai_response_cache, analytics_service, blockchain_service, gemini_service
 
 
 class MemConfig(Config):
@@ -287,6 +296,177 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+    # --- Student claim multi-credential selection ---
+
+    def _cleanup_claim_fixtures(self) -> None:
+        StudentClaimRequest.query.delete()
+        MintBatchRow.query.delete()
+        MintBatch.query.delete()
+        CertificateRecord.query.delete()
+        User.query.filter(User.email == "claim-student@example.edu").delete(synchronize_session=False)
+        University.query.filter_by(internal_id="claim-test-uni").delete(synchronize_session=False)
+        db.session.commit()
+
+    def _seed_claim_university(self) -> University:
+        uni = University(
+            name="Claim Test Uni",
+            internal_id="claim-test-uni",
+            domain_email="claim.edu",
+            wallet_address="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+            status="verified",
+            eip712_nonce=0,
+            eip712_single_nonce=0,
+            eip712_batch_nonce=0,
+            institution_contact_email="registrar@claim.edu",
+            institution_contact_phone="+10000000001",
+            institution_website="https://claim.edu",
+            institution_license_id="LIC-CLAIM",
+            institution_license_authority="Board",
+            institution_license_valid_until="2035-12-31",
+        )
+        db.session.add(uni)
+        db.session.commit()
+        return uni
+
+    def _add_batch_row(
+        self,
+        uni: University,
+        *,
+        token_id: int,
+        cert_id: str,
+        row_index: int,
+        student_internal_id: str = "SID-1",
+        student_email: str = "alice@example.edu",
+    ) -> MintBatchRow:
+        batch = MintBatch(
+            university_id=uni.id,
+            status="executed",
+            original_filename="cohort.csv",
+            total_rows=1,
+            valid_rows=1,
+            invalid_rows=0,
+        )
+        db.session.add(batch)
+        db.session.flush()
+        row = MintBatchRow(
+            batch_id=batch.id,
+            row_index=row_index,
+            cert_id=cert_id,
+            student_internal_id=student_internal_id,
+            student_email=student_email,
+            student_full_name="Alice Example",
+            degree_title=f"Degree {cert_id}",
+            issue_date="2024-01-01",
+            row_status="mint_confirmed",
+            token_id=token_id,
+            metadata_uri=f"ipfs://Qm{cert_id}",
+            tx_hash=_tx(token_id),
+        )
+        db.session.add(row)
+        db.session.commit()
+        return row
+
+    def test_student_claim_skips_already_claimed_newest_token(self) -> None:
+        """Newest batch credential already soulbound must not block claiming an older escrowed one."""
+        self._cleanup_claim_fixtures()
+        uni = self._seed_claim_university()
+        older = self._add_batch_row(uni, token_id=101, cert_id="CERT-OLD", row_index=0)
+        newer = self._add_batch_row(uni, token_id=202, cert_id="CERT-NEW", row_index=1)
+        self.assertGreater(newer.id, older.id)
+
+        def _eligibility(*, token_id: int, issuer_wallet: str):
+            if int(token_id) == 202:
+                return False, "This credential is already soulbound (claimed)."
+            return True, None
+
+        wallet = "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65"
+        with patch.object(blockchain_service, "escrow_claim_eligibility", side_effect=_eligibility):
+            r = self.client.post(
+                "/api/public/student-claim-requests",
+                json={
+                    "university_id": uni.id,
+                    "student_internal_id": "SID-1",
+                    "student_email": "alice@example.edu",
+                    "wallet_address": wallet,
+                },
+            )
+        self.assertEqual(r.status_code, 201, r.get_data(as_text=True))
+        body = r.get_json() or {}
+        self.assertEqual(body.get("token_id"), 101)
+        req = StudentClaimRequest.query.filter_by(id=body["id"]).first()
+        self.assertIsNotNone(req)
+        self.assertEqual(req.token_id, 101)
+        self.assertEqual(req.mint_batch_row_id, older.id)
+        self.assertEqual(req.cert_id, "CERT-OLD")
+        self._cleanup_claim_fixtures()
+
+    def test_student_claim_falls_through_to_single_mint_when_batch_ineligible(self) -> None:
+        """Batch row still 'ready' in DB but unclaimable on-chain must not hide single-mint escrow."""
+        self._cleanup_claim_fixtures()
+        uni = self._seed_claim_university()
+        self._add_batch_row(uni, token_id=303, cert_id="CERT-BATCH", row_index=0)
+        single = CertificateRecord(
+            token_id=404,
+            university_id=uni.id,
+            cert_id="CERT-SINGLE",
+            ipfs_uri="ipfs://QmSingle",
+            status="issued",
+            student_internal_id="SID-1",
+            student_email="alice@example.edu",
+        )
+        db.session.add(single)
+        db.session.commit()
+
+        def _eligibility(*, token_id: int, issuer_wallet: str):
+            if int(token_id) == 303:
+                return False, "This credential is already soulbound (claimed)."
+            return True, None
+
+        wallet = "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65"
+        with patch.object(blockchain_service, "escrow_claim_eligibility", side_effect=_eligibility):
+            r = self.client.post(
+                "/api/public/student-claim-requests",
+                json={
+                    "university_id": uni.id,
+                    "student_internal_id": "SID-1",
+                    "student_email": "alice@example.edu",
+                    "wallet_address": wallet,
+                },
+            )
+        self.assertEqual(r.status_code, 201, r.get_data(as_text=True))
+        body = r.get_json() or {}
+        self.assertEqual(body.get("token_id"), 404)
+        req = StudentClaimRequest.query.filter_by(id=body["id"]).first()
+        self.assertIsNotNone(req)
+        self.assertIsNone(req.mint_batch_row_id)
+        self.assertEqual(req.cert_id, "CERT-SINGLE")
+        self._cleanup_claim_fixtures()
+
+    def test_student_claim_optional_token_id_selects_specific_credential(self) -> None:
+        self._cleanup_claim_fixtures()
+        uni = self._seed_claim_university()
+        self._add_batch_row(uni, token_id=101, cert_id="CERT-OLD", row_index=0)
+        self._add_batch_row(uni, token_id=202, cert_id="CERT-NEW", row_index=1)
+
+        with patch.object(
+            blockchain_service,
+            "escrow_claim_eligibility",
+            return_value=(True, None),
+        ):
+            r = self.client.post(
+                "/api/public/student-claim-requests",
+                json={
+                    "university_id": uni.id,
+                    "student_internal_id": "SID-1",
+                    "student_email": "alice@example.edu",
+                    "wallet_address": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65",
+                    "token_id": 101,
+                },
+            )
+        self.assertEqual(r.status_code, 201, r.get_data(as_text=True))
+        self.assertEqual((r.get_json() or {}).get("token_id"), 101)
+        self._cleanup_claim_fixtures()
 
 
 if __name__ == "__main__":
