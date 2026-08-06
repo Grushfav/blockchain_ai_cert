@@ -26,9 +26,15 @@ AMOY_TX_EXPLORER = "https://amoy.polygonscan.com/tx/"
 
 def _require_admin() -> None:
     assert _api_bp is not None
-    from flask_jwt_extended import get_jwt
+    from flask_jwt_extended import get_jwt_identity
 
-    if get_jwt().get("role") != "admin":
+    from app.models import User
+
+    uid = get_jwt_identity()
+    if not uid:
+        abort(401)
+    user = db.session.get(User, int(uid))
+    if not user or user.role != "admin":
         abort(403)
 
 

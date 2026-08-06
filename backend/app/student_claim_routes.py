@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
+from eth_account import Account
+from eth_account.messages import encode_defunct
 from flask import Blueprint, abort, jsonify, request
-from flask_jwt_extended import get_jwt, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy import func
 from web3 import Web3
 
@@ -18,10 +21,50 @@ ROW_READY_FOR_CLAIM = frozenset({"mint_confirmed", "email_sent", "email_failed"}
 ACTIVE_STATUSES = frozenset({"pending", "approved"})
 
 
-def _require_roles(*roles: str) -> None:
-    claims = get_jwt()
-    if claims.get("role") not in roles:
-        abort(403)
+def student_claim_wallet_message(
+    *,
+    university_id: int,
+    student_internal_id: str,
+    student_email: str,
+    wallet_address: str,
+) -> str:
+    """Deterministic personal_sign payload binding identity fields to the destination wallet."""
+    return (
+        "TrueCert student claim\n"
+        f"university_id:{int(university_id)}\n"
+        f"student_internal_id:{student_internal_id.strip()}\n"
+        f"student_email:{student_email.strip().lower()}\n"
+        f"wallet:{Web3.to_checksum_address(wallet_address)}"
+    )
+
+
+def _verify_wallet_claim_signature(
+    *,
+    university_id: int,
+    student_internal_id: str,
+    student_email: str,
+    wallet: str,
+    signature: str,
+) -> tuple[bool, str | None]:
+    message = student_claim_wallet_message(
+        university_id=university_id,
+        student_internal_id=student_internal_id,
+        student_email=student_email,
+        wallet_address=wallet,
+    )
+    sig = (signature or "").strip()
+    if not sig:
+        return False, "wallet_signature is required"
+    if not sig.startswith("0x"):
+        sig = "0x" + sig
+    try:
+        signable = encode_defunct(text=message)
+        recovered = Account.recover_message(signable, signature=sig)
+    except Exception:
+        return False, "wallet_signature is invalid"
+    if Web3.to_checksum_address(recovered) != Web3.to_checksum_address(wallet):
+        return False, "wallet_signature does not match wallet_address"
+    return True, None
 
 
 def _current_user() -> User:
@@ -32,6 +75,13 @@ def _current_user() -> User:
     if not user:
         abort(401)
     return user
+
+
+def _require_roles(*roles: str) -> None:
+    """Authorize from the live DB role (not stale JWT claims)."""
+    user = _current_user()
+    if user.role not in roles:
+        abort(403)
 
 
 def _serialize_request(r: StudentClaimRequest, *, row: MintBatchRow | None = None) -> dict[str, Any]:
@@ -108,6 +158,7 @@ def register_student_claim_routes(bp: Blueprint) -> None:
         student_internal_id = (data.get("student_internal_id") or "").strip()
         student_email = (data.get("student_email") or "").strip()
         wallet_raw = (data.get("wallet_address") or "").strip()
+        wallet_signature = (data.get("wallet_signature") or "").strip()
         if not student_internal_id or not student_email:
             return ({"error": "student_internal_id and student_email are required"}, 400)
         if not wallet_raw.startswith("0x") or len(wallet_raw) != 42:
@@ -116,6 +167,15 @@ def register_student_claim_routes(bp: Blueprint) -> None:
             wallet = Web3.to_checksum_address(wallet_raw)
         except Exception:
             return ({"error": "wallet_address is invalid"}, 400)
+        ok_sig, sig_err = _verify_wallet_claim_signature(
+            university_id=university_id,
+            student_internal_id=student_internal_id,
+            student_email=student_email,
+            wallet=wallet,
+            signature=wallet_signature,
+        )
+        if not ok_sig:
+            return ({"error": sig_err or "wallet_signature is required"}, 400)
 
         uni = db.session.get(University, university_id)
         if not uni or uni.status != "verified":
@@ -163,9 +223,13 @@ def register_student_claim_routes(bp: Blueprint) -> None:
 
         rec = StudentClaimRequest(
             university_id=university_id,
-            mint_batch_row_id=row.id,
+            mint_batch_row_id=row.id if row is not None else None,
             token_id=tid,
-            cert_id=(row.cert_id or "").strip() or None,
+            cert_id=(
+                ((row.cert_id if row is not None else None) or (cert_rec.cert_id if cert_rec is not None else None) or "")
+                .strip()
+                or None
+            ),
             student_internal_id=student_internal_id.strip(),
             student_email=student_email.strip().lower(),
             wallet_address=wallet,
@@ -282,8 +346,20 @@ def register_student_claim_routes(bp: Blueprint) -> None:
             abort(403)
         data = request.get_json(silent=True) or {}
         tx_hash = (data.get("claim_tx_hash") or "").strip() or None
-        if tx_hash and not tx_hash.startswith("0x"):
+        if not tx_hash:
+            return (
+                {
+                    "error": (
+                        "claim_tx_hash is required. Paste the on-chain claim() transaction hash after the "
+                        "issuer wallet has transferred and locked the credential."
+                    )
+                },
+                400,
+            )
+        if not tx_hash.startswith("0x"):
             tx_hash = "0x" + tx_hash
+        if len(tx_hash) != 66:
+            return ({"error": "claim_tx_hash must be a 0x-prefixed 32-byte hash"}, 400)
         rec = db.session.get(StudentClaimRequest, req_id)
         if not rec or rec.university_id != int(user.university_id):
             return ({"error": "Request not found"}, 404)
@@ -295,8 +371,16 @@ def register_student_claim_routes(bp: Blueprint) -> None:
         fr = freeze_guard_response(uni)
         if fr:
             return fr
+        ok_claim, claim_err = blockchain_service.verify_certificate_claim_receipt(
+            tx_hash=tx_hash,
+            token_id=int(rec.token_id),
+            expected_student=rec.wallet_address,
+            expected_issuer=uni.wallet_address,
+        )
+        if not ok_claim:
+            return ({"error": claim_err or "Claim transaction could not be verified on-chain."}, 400)
         rec.status = "completed"
-        rec.claim_tx_hash = tx_hash[:66] if tx_hash else None
+        rec.claim_tx_hash = tx_hash[:66]
         rec.decided_at = datetime.utcnow()
         db.session.commit()
         return jsonify({"ok": True, "request": _serialize_request(rec, row=rec.mint_batch_row)})

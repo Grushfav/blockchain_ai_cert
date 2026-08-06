@@ -1,9 +1,13 @@
 import os
+from datetime import timedelta
 from pathlib import Path
 
 # Stable DB path regardless of cwd (relative sqlite:///truecert.db breaks when the IDE runs Flask from the repo root).
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _INSTANCE_DIR = _BACKEND_DIR / "instance"
+
+# Hard-coded fallback only for local/tests; production must set SECRET_KEY explicitly.
+_INSECURE_DEFAULT_SECRET = "dev-change-me"
 
 
 def _default_sqlite_uri() -> str:
@@ -35,14 +39,36 @@ def _normalize_database_url(raw: str) -> str:
 
 
 class Config:
-    SECRET_KEY = os.environ.get("SECRET_KEY") or "dev-change-me"
+    SECRET_KEY = os.environ.get("SECRET_KEY") or _INSECURE_DEFAULT_SECRET
     _database_url = (os.environ.get("DATABASE_URL") or "").strip()
     SQLALCHEMY_DATABASE_URI = (
         _normalize_database_url(_database_url) if _database_url else _default_sqlite_uri()
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY") or SECRET_KEY
-    JWT_ACCESS_TOKEN_EXPIRES = False
+    # Stolen tokens must not grant permanent access (also limits damage after role changes).
+    JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=12)
+
+    @classmethod
+    def assert_secure_secrets(cls, *, testing: bool = False) -> None:
+        """Refuse to boot with the well-known default signing secret outside tests/dev opt-in."""
+        if testing:
+            return
+        allow = (os.environ.get("TRUECERT_ALLOW_INSECURE_DEFAULTS") or "").strip().lower()
+        if allow in {"1", "true", "yes", "on"}:
+            return
+        secret = (cls.SECRET_KEY or "").strip()
+        jwt_secret = (cls.JWT_SECRET_KEY or "").strip()
+        if not secret or secret == _INSECURE_DEFAULT_SECRET:
+            raise RuntimeError(
+                "SECRET_KEY must be set to a non-default value. "
+                "For local-only insecure mode set TRUECERT_ALLOW_INSECURE_DEFAULTS=1."
+            )
+        if not jwt_secret or jwt_secret == _INSECURE_DEFAULT_SECRET:
+            raise RuntimeError(
+                "JWT_SECRET_KEY must be set to a non-default value (or inherit a strong SECRET_KEY). "
+                "For local-only insecure mode set TRUECERT_ALLOW_INSECURE_DEFAULTS=1."
+            )
 
     POLYGON_AMOY_RPC_URL = os.environ.get("POLYGON_AMOY_RPC_URL", "https://rpc-amoy.polygon.technology")
     POLYGON_AMOY_RPC_FALLBACK_URLS = os.environ.get(

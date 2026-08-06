@@ -1214,11 +1214,19 @@ export function UniversityPage() {
   }
 
   async function completeStudentClaimRequest(reqId: number) {
-    const txh = window.prompt("Paste claim transaction hash (0x…), or leave blank to mark complete without hash:") || "";
+    const txh = (
+      window.prompt(
+        "Paste the on-chain claim() transaction hash (0x…). The API verifies CertificateClaimed + soulbound owner before marking complete."
+      ) || ""
+    ).trim();
+    if (!txh) {
+      setClaimMsg("Claim tx hash is required to mark a request complete.");
+      return;
+    }
     try {
       await apiJson(`/api/university/student-claim-requests/${reqId}/complete`, {
         method: "POST",
-        json: { claim_tx_hash: txh.trim() || undefined },
+        json: { claim_tx_hash: txh },
       });
       await loadStudentClaimRequests();
     } catch (caught: unknown) {

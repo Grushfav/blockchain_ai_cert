@@ -362,3 +362,73 @@ def escrow_claim_eligibility(*, token_id: int, issuer_wallet: str) -> tuple[bool
     if owner_cs != issuer_cs:
         return False, "This token is not held in the institution escrow wallet (it may already be claimed)."
     return True, None
+
+
+def verify_certificate_claim_receipt(
+    *,
+    tx_hash: str,
+    token_id: int,
+    expected_student: str,
+    expected_issuer: str,
+) -> tuple[bool, str | None]:
+    """
+    Confirm a claim() transaction: successful receipt, CertificateClaimed for this token/student,
+    and post-state owner/locked match the soulbound destination.
+    """
+    h = (tx_hash or "").strip()
+    if not h:
+        return False, "claim_tx_hash is required"
+    if not h.startswith("0x"):
+        h = "0x" + h
+    try:
+        student_cs = Web3.to_checksum_address(expected_student)
+        issuer_cs = Web3.to_checksum_address(expected_issuer)
+    except Exception:
+        return False, "Invalid student or issuer wallet address"
+    try:
+        w3 = get_w3()
+        contract = get_contract(w3)
+        receipt = w3.eth.get_transaction_receipt(h)
+    except Exception as e:
+        return False, f"Could not load claim receipt: {e!s}"
+    if receipt is None:
+        return False, "No receipt found for claim_tx_hash"
+    if int(receipt.get("status", 0)) != 1:
+        return False, "Claim transaction failed on-chain"
+    try:
+        processed = contract.events.CertificateClaimed().process_receipt(receipt)
+    except Exception as e:
+        return False, f"Could not parse CertificateClaimed logs: {e!s}"
+    matched = False
+    for lg in processed:
+        try:
+            args = lg["args"]
+            if int(args.get("tokenId", -1)) != int(token_id):
+                continue
+            student = Web3.to_checksum_address(args.get("student"))
+            from_addr = Web3.to_checksum_address(args.get("from"))
+        except Exception:
+            continue
+        if student != student_cs:
+            return False, "Claim receipt student wallet does not match the approved request"
+        if from_addr != issuer_cs:
+            return False, "Claim receipt issuer (from) does not match the institution wallet"
+        matched = True
+        break
+    if not matched:
+        return False, "Claim receipt has no CertificateClaimed event for this token"
+    try:
+        info = read_certificate_public(w3, contract, int(token_id))
+    except Exception as e:
+        return False, f"Could not re-read token after claim: {e!s}"
+    if not info.get("exists"):
+        return False, "Token missing after claim"
+    if not info.get("locked"):
+        return False, "Token is not soulbound (locked) after claim"
+    try:
+        owner_cs = Web3.to_checksum_address(info["owner_address"])
+    except Exception:
+        return False, "Invalid on-chain owner after claim"
+    if owner_cs != student_cs:
+        return False, "On-chain owner does not match the approved student wallet"
+    return True, None
