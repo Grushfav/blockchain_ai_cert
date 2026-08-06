@@ -26,6 +26,8 @@ from sqlalchemy import inspect, text
 def create_app(config_class: type = Config) -> Flask:
     app = Flask(__name__)
     app.config.from_object(config_class)
+    if hasattr(config_class, "assert_secure_secrets"):
+        config_class.assert_secure_secrets(testing=bool(app.config.get("TESTING")))
 
     # Flask-CORS resource regexes are easy to get wrong; browsers need OPTIONS preflight
     # to return CORS headers before the real POST. Handle OPTIONS early so we never 405.

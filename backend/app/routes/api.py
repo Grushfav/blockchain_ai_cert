@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 import requests
 from flask import Blueprint, Response, current_app, jsonify, make_response, request
-from flask_jwt_extended import create_access_token, get_jwt, jwt_required
+from flask_jwt_extended import create_access_token, jwt_required
 from web3 import Web3
 
 from app.config import Config
@@ -50,14 +50,6 @@ ACTION_VALUES = {"issued", "transferred", "revoked", "burned", "reissued"}
 GEMINI_TEST_MAX_PROMPT_CHARS = 2000
 
 
-def _require_roles(*roles: str) -> None:
-    claims = get_jwt()
-    if claims.get("role") not in roles:
-        from flask import abort
-
-        abort(403)
-
-
 def _current_user() -> User:
     from flask_jwt_extended import get_jwt_identity
 
@@ -72,6 +64,15 @@ def _current_user() -> User:
 
         abort(401)
     return user
+
+
+def _require_roles(*roles: str) -> None:
+    """Authorize from the live DB role (not stale JWT claims)."""
+    user = _current_user()
+    if user.role not in roles:
+        from flask import abort
+
+        abort(403)
 
 
 def _parse_int_qs(v: str | None, default: int, *, lo: int, hi: int) -> int:

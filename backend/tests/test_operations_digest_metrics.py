@@ -7,7 +7,14 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    StudentClaimRequest,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -287,6 +294,187 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+    def _cleanup_claim_fixtures(self) -> None:
+        StudentClaimRequest.query.delete()
+        CertificateRecord.query.delete()
+        User.query.filter(User.email.in_(["claim-uni@example.edu", "claim-admin@example.edu"])).delete(
+            synchronize_session=False
+        )
+        University.query.filter(University.internal_id.in_(["claim-test-uni"])).delete(synchronize_session=False)
+        db.session.commit()
+
+    def _seed_claim_university(self) -> tuple[University, User]:
+        uni = University(
+            name="Claim Uni",
+            internal_id="claim-test-uni",
+            domain_email="claim.edu",
+            wallet_address="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            status="verified",
+            eip712_nonce=0,
+            eip712_single_nonce=0,
+            eip712_batch_nonce=0,
+        )
+        db.session.add(uni)
+        db.session.flush()
+        user = User(email="claim-uni@example.edu", role="university", university_id=uni.id)
+        user.set_password("testpass123")
+        db.session.add(user)
+        db.session.commit()
+        return uni, user
+
+    def test_public_claim_requires_wallet_signature(self) -> None:
+        self._cleanup_claim_fixtures()
+        uni, _ = self._seed_claim_university()
+        db.session.add(
+            CertificateRecord(
+                token_id=9001,
+                university_id=uni.id,
+                cert_id="CLAIM-CERT-1",
+                ipfs_uri="ipfs://claim1",
+                status="issued",
+                student_internal_id="SID-1",
+                student_email="student@claim.edu",
+            )
+        )
+        db.session.commit()
+        with patch(
+            "app.student_claim_routes.blockchain_service.escrow_claim_eligibility",
+            return_value=(True, None),
+        ):
+            r = self.client.post(
+                "/api/public/student-claim-requests",
+                json={
+                    "university_id": uni.id,
+                    "student_internal_id": "SID-1",
+                    "student_email": "student@claim.edu",
+                    "wallet_address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                },
+            )
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("wallet_signature", (r.get_json() or {}).get("error", "").lower())
+        self._cleanup_claim_fixtures()
+
+    def test_public_claim_accepts_matching_wallet_signature(self) -> None:
+        from eth_account import Account
+        from eth_account.messages import encode_defunct
+
+        from app.student_claim_routes import student_claim_wallet_message
+
+        self._cleanup_claim_fixtures()
+        uni, _ = self._seed_claim_university()
+        db.session.add(
+            CertificateRecord(
+                token_id=9002,
+                university_id=uni.id,
+                cert_id="CLAIM-CERT-2",
+                ipfs_uri="ipfs://claim2",
+                status="issued",
+                student_internal_id="SID-2",
+                student_email="student2@claim.edu",
+            )
+        )
+        db.session.commit()
+        acct = Account.from_key("0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a")
+        wallet = acct.address
+        message = student_claim_wallet_message(
+            university_id=uni.id,
+            student_internal_id="SID-2",
+            student_email="student2@claim.edu",
+            wallet_address=wallet,
+        )
+        sig = Account.sign_message(encode_defunct(text=message), private_key=acct.key).signature.hex()
+        with patch(
+            "app.student_claim_routes.blockchain_service.escrow_claim_eligibility",
+            return_value=(True, None),
+        ):
+            r = self.client.post(
+                "/api/public/student-claim-requests",
+                json={
+                    "university_id": uni.id,
+                    "student_internal_id": "SID-2",
+                    "student_email": "student2@claim.edu",
+                    "wallet_address": wallet,
+                    "wallet_signature": sig,
+                },
+            )
+        self.assertEqual(r.status_code, 201, r.get_data(as_text=True))
+        self._cleanup_claim_fixtures()
+
+    def test_claim_complete_requires_verified_receipt(self) -> None:
+        from flask_jwt_extended import create_access_token
+
+        self._cleanup_claim_fixtures()
+        uni, user = self._seed_claim_university()
+        rec = StudentClaimRequest(
+            university_id=uni.id,
+            mint_batch_row_id=None,
+            token_id=9003,
+            cert_id="CLAIM-CERT-3",
+            student_internal_id="SID-3",
+            student_email="student3@claim.edu",
+            wallet_address="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+            status="approved",
+        )
+        db.session.add(rec)
+        db.session.commit()
+        tok = create_access_token(identity=str(user.id), additional_claims={"role": "university"})
+        headers = {"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}
+
+        r_missing = self.client.post(
+            f"/api/university/student-claim-requests/{rec.id}/complete",
+            json={},
+            headers=headers,
+        )
+        self.assertEqual(r_missing.status_code, 400)
+
+        with patch(
+            "app.student_claim_routes.blockchain_service.verify_certificate_claim_receipt",
+            return_value=(False, "Claim receipt has no CertificateClaimed event for this token"),
+        ):
+            r_bad = self.client.post(
+                f"/api/university/student-claim-requests/{rec.id}/complete",
+                json={"claim_tx_hash": "0x" + "ab" * 32},
+                headers=headers,
+            )
+        self.assertEqual(r_bad.status_code, 400)
+        self.assertEqual(db.session.get(StudentClaimRequest, rec.id).status, "approved")
+
+        with patch(
+            "app.student_claim_routes.blockchain_service.verify_certificate_claim_receipt",
+            return_value=(True, None),
+        ):
+            r_ok = self.client.post(
+                f"/api/university/student-claim-requests/{rec.id}/complete",
+                json={"claim_tx_hash": "0x" + "cd" * 32},
+                headers=headers,
+            )
+        self.assertEqual(r_ok.status_code, 200, r_ok.get_data(as_text=True))
+        self.assertEqual(db.session.get(StudentClaimRequest, rec.id).status, "completed")
+        self._cleanup_claim_fixtures()
+
+    def test_jwt_role_authorized_from_db_not_claims(self) -> None:
+        from flask_jwt_extended import create_access_token
+
+        self._cleanup_claim_fixtures()
+        uni, user = self._seed_claim_university()
+        # Stale JWT claims say admin, but DB role is university.
+        forged = create_access_token(identity=str(user.id), additional_claims={"role": "admin"})
+        headers = {"Authorization": f"Bearer {forged}"}
+        r = self.client.get("/api/admin/universities", headers=headers)
+        self.assertEqual(r.status_code, 403)
+        # Demotion / wrong claim must not unlock university mint either if role were flipped the other way.
+        admin = User(email="claim-admin@example.edu", role="admin")
+        admin.set_password("adminpass")
+        db.session.add(admin)
+        db.session.commit()
+        demoted_tok = create_access_token(identity=str(admin.id), additional_claims={"role": "university"})
+        r2 = self.client.get(
+            "/api/university/me",
+            headers={"Authorization": f"Bearer {demoted_tok}"},
+        )
+        self.assertEqual(r2.status_code, 403)
+        self._cleanup_claim_fixtures()
 
 
 if __name__ == "__main__":

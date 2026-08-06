@@ -35,12 +35,12 @@ _api_bp: Blueprint | None = None
 
 
 def _require_roles(*roles: str) -> None:
+    """Authorize from the live DB role (not stale JWT claims)."""
     assert _api_bp is not None
     from flask import abort
-    from flask_jwt_extended import get_jwt
 
-    claims = get_jwt()
-    if claims.get("role") not in roles:
+    user = _current_user()
+    if user.role not in roles:
         abort(403)
 
 
