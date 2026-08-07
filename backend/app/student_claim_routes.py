@@ -153,6 +153,12 @@ def register_student_claim_routes(bp: Blueprint) -> None:
         if not ok_chain:
             return ({"error": chain_err or "This credential cannot be transferred right now."}, 400)
 
+        # Serialize create against concurrent duplicate pending/approved claims for the same token.
+        # Lock the university row so two POSTs cannot both pass the open check.
+        locked_uni = University.query.filter_by(id=int(university_id)).with_for_update().first()
+        if not locked_uni or locked_uni.status != "verified":
+            return ({"error": "Institution not found or not accepting requests"}, 404)
+
         open_req = (
             StudentClaimRequest.query.filter_by(university_id=university_id, token_id=tid)
             .filter(StudentClaimRequest.status.in_(tuple(ACTIVE_STATUSES)))
@@ -161,11 +167,20 @@ def register_student_claim_routes(bp: Blueprint) -> None:
         if open_req:
             return ({"error": "A claim request for this credential is already open."}, 409)
 
+        # Prefer batch-row fields when present; single-mint CertificateRecord path has no row.
+        mint_batch_row_id = int(row.id) if row is not None else None
+        if row is not None:
+            cert_id_val = (row.cert_id or "").strip() or None
+        elif cert_rec is not None:
+            cert_id_val = (cert_rec.cert_id or "").strip() or None
+        else:
+            cert_id_val = None
+
         rec = StudentClaimRequest(
             university_id=university_id,
-            mint_batch_row_id=row.id,
+            mint_batch_row_id=mint_batch_row_id,
             token_id=tid,
-            cert_id=(row.cert_id or "").strip() or None,
+            cert_id=cert_id_val,
             student_internal_id=student_internal_id.strip(),
             student_email=student_email.strip().lower(),
             wallet_address=wallet,

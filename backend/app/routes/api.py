@@ -1527,6 +1527,15 @@ def prepare_reissue(old_token_id: int):
     if g:
         return g
 
+    # Refuse cross-tenant reissue prepare: old token must be this institution's in the index
+    # and on-chain issuerOf must match the university wallet (defense in depth vs wallet NotIssuer).
+    old_rec = CertificateRecord.query.filter_by(token_id=int(old_token_id)).first()
+    if not old_rec or int(old_rec.university_id) != int(uni.id):
+        return jsonify({"error": "Old token not found for this institution"}), 404
+    old_status = (old_rec.status or "").strip().lower()
+    if old_status in ("prepared", "burned", "reissued"):
+        return jsonify({"error": f"Old token cannot be reissued from status {old_rec.status}"}), 400
+
     data = request.get_json(silent=True) or {}
     try:
         metadata = _build_metadata(data, uni, supersedes_token_id=old_token_id)
@@ -1541,6 +1550,16 @@ def prepare_reissue(old_token_id: int):
         if cfg_err:
             return jsonify({"error": cfg_err}), 503
         contract = blockchain_service.get_contract(w3)
+        onchain = blockchain_service.read_certificate_public(w3, contract, int(old_token_id))
+        if not onchain.get("exists"):
+            return jsonify({"error": "Old token does not exist on-chain"}), 400
+        try:
+            chain_issuer = Web3.to_checksum_address(onchain["issuer_address"])
+            uni_wallet = Web3.to_checksum_address(uni.wallet_address)
+        except Exception:
+            return jsonify({"error": "Invalid issuer wallet on record or chain"}), 400
+        if chain_issuer.lower() != uni_wallet.lower():
+            return jsonify({"error": "Old token was not issued by this institution wallet"}), 403
         next_token_id = int(contract.functions.nextTokenId().call())
         ipfs_uri = pinata_service.pin_certificate_metadata(next_token_id, signed_metadata, Config.PINATA_JWT)
     except Exception as e:

@@ -7,7 +7,16 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    StudentClaimRequest,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -152,10 +161,17 @@ class OperationsDigestMetricsTests(unittest.TestCase):
     # --- Single-mint HTTPS metadata (same app/db lifecycle as class; must run before tearDownClass drop_all) ---
 
     def _cleanup_mint_fixtures(self) -> None:
+        StudentClaimRequest.query.delete()
+        MintBatchRow.query.delete()
+        MintBatch.query.delete()
         MintAuthorizationRequest.query.delete()
         CertificateRecord.query.delete()
-        User.query.filter(User.email == "singlemint@example.edu").delete(synchronize_session=False)
-        University.query.filter_by(internal_id="single-mint-test-uni").delete(synchronize_session=False)
+        User.query.filter(User.email.in_(["singlemint@example.edu", "otheruni@example.edu"])).delete(
+            synchronize_session=False
+        )
+        University.query.filter(
+            University.internal_id.in_(["single-mint-test-uni", "other-uni-test"])
+        ).delete(synchronize_session=False)
         db.session.commit()
 
     def _seed_verified_university_single_mint(self) -> tuple[University, User]:
@@ -287,6 +303,140 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+    def test_frozen_university_cannot_build_batch_eip712(self) -> None:
+        """GET /eip712 mutates authorization state; freeze must block it like prepare/submit."""
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        uni.is_frozen = True
+        uni.frozen_reason = "compliance hold"
+        batch = MintBatch(
+            university_id=uni.id,
+            status="processing",
+            original_filename="t.csv",
+            created_by_user_id=user.id,
+            total_rows=1,
+            valid_rows=1,
+            invalid_rows=0,
+        )
+        db.session.add(batch)
+        db.session.flush()
+        db.session.add(
+            MintBatchRow(
+                batch_id=batch.id,
+                row_index=0,
+                cert_id="CERT-BATCH-1",
+                student_internal_id="S1",
+                student_email="s1@example.edu",
+                student_full_name="Sam",
+                degree_title="BA",
+                issue_date="2024-01-01",
+                row_status="prepared",
+                metadata_uri="ipfs://QmBatch",
+                core_hash="0x" + "ab" * 32,
+            )
+        )
+        db.session.commit()
+
+        r = self.client.get(
+            f"/api/university/mint-batches/{batch.id}/eip712",
+            headers=self._uni_jwt_single_mint(user),
+        )
+        self.assertEqual(r.status_code, 403, r.get_data(as_text=True))
+        body = r.get_json() or {}
+        self.assertIn("frozen", (body.get("error") or "").lower())
+        self._cleanup_mint_fixtures()
+
+    def test_prepare_reissue_rejects_other_university_token(self) -> None:
+        self._cleanup_mint_fixtures()
+        uni_a, user_a = self._seed_verified_university_single_mint()
+        uni_b = University(
+            name="Other Uni",
+            internal_id="other-uni-test",
+            domain_email="other.edu",
+            wallet_address="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+            status="verified",
+            institution_contact_email="r@other.edu",
+            institution_contact_phone="+10000000001",
+            institution_website="https://other.edu",
+            institution_license_id="LIC-2",
+            institution_license_authority="Board",
+            institution_license_valid_until="2035-12-31",
+        )
+        db.session.add(uni_b)
+        db.session.flush()
+        db.session.add(
+            CertificateRecord(
+                token_id=77,
+                university_id=uni_b.id,
+                cert_id="CERT-OTHER-77",
+                ipfs_uri="ipfs://other",
+                core_hash="0x" + "cd" * 32,
+                status="issued",
+            )
+        )
+        db.session.commit()
+
+        r = self.client.post(
+            "/api/university/certificates/prepare-reissue/77",
+            json={
+                "student_name": "Pat",
+                "degree_type": "BSc",
+                "cert_id": "CERT-REISSUE-A",
+                "issue_date": "2024-06-01",
+            },
+            headers=self._uni_jwt_single_mint(user_a),
+        )
+        self.assertEqual(r.status_code, 404, r.get_data(as_text=True))
+        self.assertIn("not found", ((r.get_json() or {}).get("error") or "").lower())
+        self.assertIsNone(CertificateRecord.query.filter_by(university_id=uni_a.id).first())
+        self._cleanup_mint_fixtures()
+
+    def test_public_claim_single_mint_and_duplicate_open_rejected(self) -> None:
+        """Single-mint claims must not deref a null batch row; second open claim is 409."""
+        self._cleanup_mint_fixtures()
+        uni, _user = self._seed_verified_university_single_mint()
+        db.session.add(
+            CertificateRecord(
+                token_id=88,
+                university_id=uni.id,
+                cert_id="CERT-CLAIM-88",
+                ipfs_uri="ipfs://claim",
+                core_hash="0x" + "ef" * 32,
+                status="issued",
+                student_internal_id="STU-88",
+                student_email="claimant@example.edu",
+            )
+        )
+        db.session.commit()
+
+        wallet = "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65"
+        body = {
+            "university_id": uni.id,
+            "student_internal_id": "STU-88",
+            "student_email": "claimant@example.edu",
+            "wallet_address": wallet,
+        }
+        import app.student_claim_routes as claim_mod
+
+        with patch.object(claim_mod.blockchain_service, "escrow_claim_eligibility", return_value=(True, None)):
+            r1 = self.client.post("/api/public/student-claim-requests", json=body)
+            self.assertEqual(r1.status_code, 201, r1.get_data(as_text=True))
+            data1 = r1.get_json() or {}
+            self.assertEqual(data1.get("token_id"), 88)
+            rec = StudentClaimRequest.query.filter_by(id=int(data1["id"])).first()
+            self.assertIsNotNone(rec)
+            self.assertIsNone(rec.mint_batch_row_id)
+            self.assertEqual(rec.cert_id, "CERT-CLAIM-88")
+
+            r2 = self.client.post(
+                "/api/public/student-claim-requests",
+                json={**body, "wallet_address": "0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc"},
+            )
+            self.assertEqual(r2.status_code, 409, r2.get_data(as_text=True))
+            self.assertEqual(StudentClaimRequest.query.filter_by(token_id=88).count(), 1)
+
+        self._cleanup_mint_fixtures()
 
 
 if __name__ == "__main__":
