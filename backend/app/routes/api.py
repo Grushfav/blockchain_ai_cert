@@ -1247,6 +1247,31 @@ def submit_mint_authorization():
         db.session.commit()
         return jsonify({"error": "Signature signer does not match university wallet"}), 403
 
+    # Refuse before mint if another institution already issued this cert_id. A stale MAR can
+    # otherwise mint on-chain and overwrite the foreign CertificateRecord without rebinding
+    # university_id (cross-tenant index hijack / orphaned victim token).
+    foreign_issued = CertificateRecord.query.filter_by(cert_id=req.cert_id).first()
+    if (
+        foreign_issued
+        and int(foreign_issued.university_id) != int(uni.id)
+        and (foreign_issued.status or "").lower() != "prepared"
+    ):
+        req.status = "failed"
+        req.failure_code = "cert_id_foreign_issued"
+        db.session.commit()
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "cert_id is already issued under another institution's certificate index. "
+                        "Prepare a new mint with a unique cert_id."
+                    ),
+                    "error_code": "cert_id_foreign_issued",
+                }
+            ),
+            409,
+        )
+
     try:
         w3 = blockchain_service.get_w3()
         cfg_err = _require_contract_code(w3)
@@ -1415,6 +1440,20 @@ def submit_mint_authorization():
                         ),
                         500,
                     )
+        if int(rec.university_id) != int(uni.id) and (rec.status or "").lower() != "prepared":
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "cert_id is already issued under another institution's certificate index. "
+                            "Prepare a new mint with a unique cert_id."
+                        ),
+                        "error_code": "cert_id_foreign_issued",
+                    }
+                ),
+                409,
+            )
+        rec.university_id = uni.id
         rec.token_id = token_id_int
         rec.ipfs_uri = mint_uri
         rec.core_hash = req.core_hash

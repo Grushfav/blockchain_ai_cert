@@ -970,6 +970,35 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             if row.row_status != "prepared":
                 return jsonify({"error": f"Row {row.row_index} is not prepared (status {row.row_status})"}), 400
 
+            # Same cross-tenant guard as single-mint submit: do not mint if another institution
+            # already issued this cert_id (stale batch row / freed reservation race).
+            if row.cert_id:
+                foreign_issued = CertificateRecord.query.filter_by(cert_id=row.cert_id).first()
+                if (
+                    foreign_issued
+                    and int(foreign_issued.university_id) != int(uni.id)
+                    and (foreign_issued.status or "").lower() != "prepared"
+                ):
+                    row.row_status = "mint_failed"
+                    row.error_message = "cert_id already issued by another institution"
+                    b.updated_at = datetime.utcnow()
+                    chunk_wall_ms = _apply_execute_chunk_timing()
+                    db.session.commit()
+                    return (
+                        jsonify(
+                            {
+                                "error": (
+                                    f"Row {row.row_index}: cert_id is already issued under another "
+                                    "institution's certificate index."
+                                ),
+                                "error_code": "cert_id_foreign_issued",
+                                "partial": minted_out,
+                                "timing": {"chunk_wall_ms": chunk_wall_ms},
+                            }
+                        ),
+                        409,
+                    )
+
             prep_at_snapshot = row.prepared_at
             chain_t0 = time.perf_counter()
             try:
@@ -1098,6 +1127,21 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                                     ),
                                     500,
                                 )
+                    if int(rec.university_id) != int(uni.id) and (rec.status or "").lower() != "prepared":
+                        return (
+                            jsonify(
+                                {
+                                    "error": (
+                                        f"Row {row.row_index}: cert_id is already issued under another "
+                                        "institution's certificate index."
+                                    ),
+                                    "error_code": "cert_id_foreign_issued",
+                                    "partial": minted_out,
+                                }
+                            ),
+                            409,
+                        )
+                    rec.university_id = uni.id
                     rec.token_id = token_id_int
                     rec.ipfs_uri = row.metadata_uri or rec.ipfs_uri
                     rec.core_hash = row.core_hash or rec.core_hash
