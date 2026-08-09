@@ -1075,6 +1075,41 @@ def _fetch_offchain_metadata_from_uri(uri: str) -> dict[str, Any]:
     return out
 
 
+def _clear_unminted_prepared_cert_reservation(*, uni: University, cert_id: str) -> None:
+    """Release a stuck prepared index row so prepare-mint can retry after MAR terminal failure/expiry.
+
+    Mirrors batch ``reset-prepare``: only deletes when status is prepared and the reserved token_id
+    has no on-chain certificate. Cancels pending/failed mint authorization rows for the same cert.
+    """
+    cert_id = (cert_id or "").strip()
+    if not cert_id:
+        return
+    rec = CertificateRecord.query.filter_by(cert_id=cert_id).first()
+    if not rec:
+        return
+    if rec.university_id != uni.id or (rec.status or "").lower() != "prepared":
+        raise ValueError("cert_id already exists in database")
+    try:
+        w3 = blockchain_service.get_w3()
+        cfg_err = _require_contract_code(w3)
+        if cfg_err:
+            raise ValueError(cfg_err)
+        contract = blockchain_service.get_contract(w3)
+        onchain = blockchain_service.read_certificate_public(w3, contract, int(rec.token_id))
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"Chain read failed while clearing prepared reservation: {e!s}") from e
+    if onchain.get("exists"):
+        raise ValueError("cert_id already exists in database")
+    for mar in MintAuthorizationRequest.query.filter_by(cert_id=cert_id, university_id=uni.id).all():
+        if (mar.status or "").lower() in {"pending", "failed"}:
+            mar.status = "cancelled"
+            mar.failure_code = mar.failure_code or "superseded_by_reprepare"
+    db.session.delete(rec)
+    db.session.flush()
+
+
 @bp.post("/university/certificates/prepare-mint")
 @jwt_required()
 def prepare_mint_certificate():
@@ -1091,11 +1126,29 @@ def prepare_mint_certificate():
     try:
         # IID/email: DB + MAR only — never in metadata, core_hash, or EIP-712 commitment.
         student_internal_id, student_email = _validate_single_mint_student_contact(data)
+        # After MAR expiry / wrong_signer / invalid_signature, submit marks the auth failed but leaves
+        # CertificateRecord(status=prepared). Without releasing that reservation, prepare-mint's
+        # uniqueness check permanently blocks the institutional cert_id (batch reset-prepare cannot
+        # help — CSV validate rejects the same cert_id).
+        _clear_unminted_prepared_cert_reservation(
+            uni=uni, cert_id=str(data.get("cert_id") or "").strip()
+        )
         metadata = _build_metadata(data, uni)
         core_hash = _core_hash_hex(metadata)
         signed_metadata = metadata_signing.sign_metadata(metadata)
     except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        msg = str(e)
+        # Chain/config failures while clearing a stuck reservation should not look like bad input.
+        if any(
+            needle in msg
+            for needle in (
+                "TRUECERT_CONTRACT_ADDRESS",
+                "No contract bytecode",
+                "Chain read failed",
+            )
+        ):
+            return jsonify({"error": msg}), 503
+        return jsonify({"error": msg}), 400
 
     if not (Config.PINATA_JWT or "").strip():
         return jsonify(
@@ -1725,6 +1778,25 @@ def _upsert_certificate_status(
     if not university:
         return
     rec = CertificateRecord.query.filter_by(token_id=token_id).first()
+    # prepare-mint / prepare-reissue reserve cert_id at nextTokenId. If another mint advances
+    # nextTokenId before the wallet tx lands, activity sync sees CertificateMinted at a different
+    # token_id. Adopting the prepared row (or deleting the prepared ghost) avoids unique(cert_id)
+    # IntegrityError that would abort the entire sync transaction and leave the index stuck.
+    if cert_id:
+        prepared_ghosts = [
+            row
+            for row in CertificateRecord.query.filter_by(
+                cert_id=cert_id, university_id=university.id
+            ).all()
+            if (row.status or "").lower() == "prepared" and (rec is None or row.id != rec.id)
+        ]
+        for ghost in prepared_ghosts:
+            if rec is None:
+                ghost.token_id = token_id
+                rec = ghost
+            else:
+                db.session.delete(ghost)
+                db.session.flush()
     if not rec:
         rec = CertificateRecord(
             token_id=token_id,
