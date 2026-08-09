@@ -288,6 +288,150 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
 
+    def test_upsert_adopts_prepared_cert_id_when_token_drifts(self) -> None:
+        """Reissue/mint sync must not IntegrityError when prepare reserved a stale nextTokenId."""
+        from app.routes import api as api_mod
+        from sqlalchemy.exc import IntegrityError
+
+        self._cleanup_mint_fixtures()
+        uni, _user = self._seed_verified_university_single_mint()
+        db.session.add(
+            CertificateRecord(
+                token_id=10,
+                university_id=uni.id,
+                cert_id="CERT-REISSUE-1",
+                ipfs_uri="ipfs://prepared-ghost",
+                status="prepared",
+            )
+        )
+        db.session.commit()
+
+        api_mod._upsert_certificate_status(
+            university=uni,
+            token_id=11,
+            ipfs_uri="ipfs://minted",
+            core_hash="0x" + ("ab" * 32),
+            cert_id="CERT-REISSUE-1",
+            status="issued",
+            supersedes_token_id=9,
+        )
+        try:
+            db.session.commit()
+        except IntegrityError as e:
+            db.session.rollback()
+            self.fail(f"upsert should adopt prepared cert_id reservation, got IntegrityError: {e}")
+
+        rows = CertificateRecord.query.filter_by(cert_id="CERT-REISSUE-1").all()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].token_id, 11)
+        self.assertEqual(rows[0].status, "issued")
+        self.assertEqual(rows[0].ipfs_uri, "ipfs://minted")
+        self.assertEqual(rows[0].supersedes_token_id, 9)
+        self.assertIsNone(CertificateRecord.query.filter_by(token_id=10).first())
+        self._cleanup_mint_fixtures()
+
+    def test_prepare_mint_retries_after_failed_authorization_reservation(self) -> None:
+        """Failed/expired MAR must not permanently lock institutional cert_id on prepare-mint."""
+        import app.config as app_config
+        from app.routes import api as api_mod
+
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        db.session.add(
+            CertificateRecord(
+                token_id=7,
+                university_id=uni.id,
+                cert_id="CERT-STUCK-1",
+                ipfs_uri="ipfs://old-prepare",
+                status="prepared",
+                student_internal_id="IID-OLD",
+                student_email="old@example.edu",
+            )
+        )
+        db.session.add(
+            MintAuthorizationRequest(
+                id="mar-stuck-1",
+                university_id=uni.id,
+                cert_id="CERT-STUCK-1",
+                core_hash="0x" + ("cd" * 32),
+                metadata_uri="ipfs://old-prepare",
+                expected_token_id=7,
+                student_internal_id="IID-OLD",
+                student_email="old@example.edu",
+                commitment_hex="0x" + ("11" * 32),
+                nonce_snapshot=0,
+                expiry_unix=1,
+                status="failed",
+                failure_code="wrong_signer",
+            )
+        )
+        db.session.commit()
+
+        orig_jwt = app_config.Config.PINATA_JWT
+        orig_kid = app_config.Config.TRUECERT_SIG_KID
+        orig_priv = app_config.Config.TRUECERT_SIG_PRIVATE_KEY
+        orig_pubkeys = app_config.Config.TRUECERT_SIG_PUBLIC_KEYS
+        app_config.Config.PINATA_JWT = "test-jwt-placeholder"
+        app_config.Config.TRUECERT_SIG_KID = "unit-test"
+        app_config.Config.TRUECERT_SIG_PRIVATE_KEY = (
+            "0x2ce2795dc16073228f97a72d58e7b2694422336912356849487544a36d8ed6eb"
+        )
+        app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = (
+            '{"unit-test": "0x72f2d39a93d51d639c441592b0c399394d7fdab70d6ac9011e54e24ec76fd4ee"}'
+        )
+        mock_pin = MagicMock(return_value="ipfs://QmReprepare")
+        mock_contract = MagicMock()
+        mock_contract.functions.nextTokenId.return_value.call.return_value = 99
+        try:
+            with patch.object(api_mod.pinata_service, "pin_certificate_metadata", mock_pin):
+                with patch.object(api_mod, "_require_contract_code", return_value=None):
+                    with patch.object(api_mod.blockchain_service, "get_w3", return_value=MagicMock()):
+                        with patch.object(
+                            api_mod.blockchain_service, "get_contract", return_value=mock_contract
+                        ):
+                            with patch.object(
+                                api_mod.blockchain_service,
+                                "read_certificate_public",
+                                return_value={"exists": False},
+                            ):
+                                r = self.client.post(
+                                    "/api/university/certificates/prepare-mint",
+                                    json={
+                                        "student_internal_id": "IID-NEW",
+                                        "student_email": "new@example.edu",
+                                        "student_name": "Pat Lee",
+                                        "degree_type": "BSc CS",
+                                        "cert_id": "CERT-STUCK-1",
+                                        "issue_date": "2024-06-15",
+                                    },
+                                    headers=self._uni_jwt_single_mint(user),
+                                )
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            data = r.get_json() or {}
+            self.assertEqual(data.get("cert_id"), "CERT-STUCK-1")
+            self.assertEqual(data.get("metadata_uri"), "ipfs://QmReprepare")
+
+            stuck = CertificateRecord.query.filter_by(token_id=7).first()
+            self.assertIsNone(stuck)
+            rec = CertificateRecord.query.filter_by(cert_id="CERT-STUCK-1").one()
+            self.assertEqual(rec.token_id, 99)
+            self.assertEqual(rec.status, "prepared")
+            self.assertEqual(rec.student_internal_id, "IID-NEW")
+
+            old_mar = db.session.get(MintAuthorizationRequest, "mar-stuck-1")
+            self.assertIsNotNone(old_mar)
+            self.assertEqual(old_mar.status, "cancelled")
+            new_mar = MintAuthorizationRequest.query.filter_by(
+                cert_id="CERT-STUCK-1", status="pending"
+            ).one()
+            self.assertEqual(new_mar.student_email, "new@example.edu")
+        finally:
+            app_config.Config.PINATA_JWT = orig_jwt
+            app_config.Config.TRUECERT_SIG_KID = orig_kid
+            app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
+            app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
+            self._cleanup_mint_fixtures()
+
 
 if __name__ == "__main__":
     unittest.main()
