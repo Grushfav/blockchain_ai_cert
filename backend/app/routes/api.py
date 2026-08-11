@@ -1556,6 +1556,24 @@ def prepare_reissue(old_token_id: int):
     rec.core_hash = core_hash
     rec.status = "prepared"
     rec.supersedes_token_id = old_token_id
+    # Preserve issuer-only student contact so public /claim keeps working after reissue.
+    old_rec = CertificateRecord.query.filter_by(token_id=int(old_token_id)).first()
+    if old_rec:
+        if (old_rec.student_internal_id or "").strip():
+            rec.student_internal_id = old_rec.student_internal_id
+        if (old_rec.student_email or "").strip():
+            rec.student_email = old_rec.student_email
+    if not (rec.student_internal_id or "").strip() or not (rec.student_email or "").strip():
+        brow = (
+            MintBatchRow.query.filter_by(token_id=int(old_token_id))
+            .order_by(MintBatchRow.id.desc())
+            .first()
+        )
+        if brow:
+            if not (rec.student_internal_id or "").strip() and (brow.student_internal_id or "").strip():
+                rec.student_internal_id = brow.student_internal_id
+            if not (rec.student_email or "").strip() and (brow.student_email or "").strip():
+                rec.student_email = brow.student_email
     db.session.commit()
 
     return jsonify(
@@ -1742,6 +1760,37 @@ def _upsert_certificate_status(
         rec.status = status
     if supersedes_token_id is not None:
         rec.supersedes_token_id = supersedes_token_id
+
+
+def _propagate_reissue_claim_continuity(*, old_token_id: int, new_token_id: int) -> None:
+    """Keep public student-claim matching pointed at the replacement token after reissue.
+
+    Student contact lives on ``CertificateRecord`` (single-mint) and/or ``MintBatchRow`` (batch).
+    ``revokeAndReissue`` mints a new ``token_id``; without retargeting, claim lookup still finds the
+    revoked/reissued token and eligibility fails (or single-mint contact is missing on the new row).
+    """
+    old_tid = int(old_token_id)
+    new_tid = int(new_token_id)
+    if old_tid == new_tid:
+        return
+    old_rec = CertificateRecord.query.filter_by(token_id=old_tid).first()
+    new_rec = CertificateRecord.query.filter_by(token_id=new_tid).first()
+    if new_rec and old_rec:
+        if not (new_rec.student_internal_id or "").strip() and (old_rec.student_internal_id or "").strip():
+            new_rec.student_internal_id = old_rec.student_internal_id
+        if not (new_rec.student_email or "").strip() and (old_rec.student_email or "").strip():
+            new_rec.student_email = old_rec.student_email
+
+    batch_rows = MintBatchRow.query.filter_by(token_id=old_tid).all()
+    for brow in batch_rows:
+        brow.token_id = new_tid
+        if new_rec and (new_rec.cert_id or "").strip():
+            brow.cert_id = new_rec.cert_id
+        if new_rec:
+            if not (new_rec.student_internal_id or "").strip() and (brow.student_internal_id or "").strip():
+                new_rec.student_internal_id = brow.student_internal_id
+            if not (new_rec.student_email or "").strip() and (brow.student_email or "").strip():
+                new_rec.student_email = brow.student_email
 
 
 def _append_activity(
@@ -1969,6 +2018,7 @@ def sync_university_activity():
         _upsert_certificate_status(
             university=uni, token_id=new_token, status="issued", supersedes_token_id=old_token
         )
+        _propagate_reissue_claim_continuity(old_token_id=old_token, new_token_id=new_token)
         _append_activity(
             university_id=uni.id,
             token_id=new_token,

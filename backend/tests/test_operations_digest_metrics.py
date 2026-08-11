@@ -7,7 +7,16 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    StudentClaimRequest,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -287,6 +296,154 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+    def _cleanup_reissue_claim_fixtures(self) -> None:
+        StudentClaimRequest.query.delete()
+        MintBatchRow.query.delete()
+        MintBatch.query.delete()
+        CertificateRecord.query.delete()
+        User.query.filter(User.email == "reissue-claim@example.edu").delete(synchronize_session=False)
+        University.query.filter_by(internal_id="reissue-claim-test-uni").delete(synchronize_session=False)
+        db.session.commit()
+
+    def _seed_reissue_claim_university(self) -> University:
+        uni = University(
+            name="Reissue Claim Uni",
+            internal_id="reissue-claim-test-uni",
+            domain_email="reissue.edu",
+            wallet_address="0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            status="verified",
+            eip712_nonce=0,
+            eip712_single_nonce=0,
+            eip712_batch_nonce=0,
+            institution_contact_email="registrar@reissue.edu",
+            institution_contact_phone="+10000000000",
+            institution_website="https://reissue.edu",
+            institution_license_id="LIC-R1",
+            institution_license_authority="Board",
+            institution_license_valid_until="2035-12-31",
+        )
+        db.session.add(uni)
+        db.session.flush()
+        user = User(email="reissue-claim@example.edu", role="university", university_id=uni.id)
+        user.set_password("testpass123")
+        db.session.add(user)
+        db.session.commit()
+        return uni
+
+    def test_propagate_reissue_claim_continuity_batch_and_single(self) -> None:
+        """After reissue sync, claim matching must use the new token (batch row + student contact)."""
+        from app.routes import api as api_mod
+        from app.student_claim_routes import _find_mint_row_for_student, _find_single_certificate_for_student
+
+        self._cleanup_reissue_claim_fixtures()
+        uni = self._seed_reissue_claim_university()
+
+        old_tid, new_tid = 101, 202
+        db.session.add(
+            CertificateRecord(
+                token_id=old_tid,
+                university_id=uni.id,
+                cert_id="CERT-OLD",
+                ipfs_uri="ipfs://old",
+                status="reissued",
+                student_internal_id="STU-42",
+                student_email="student@reissue.edu",
+            )
+        )
+        db.session.add(
+            CertificateRecord(
+                token_id=new_tid,
+                university_id=uni.id,
+                cert_id="CERT-NEW",
+                ipfs_uri="ipfs://new",
+                status="issued",
+                supersedes_token_id=old_tid,
+            )
+        )
+        batch = MintBatch(
+            university_id=uni.id,
+            created_by_user_id=User.query.filter_by(email="reissue-claim@example.edu").first().id,
+            original_filename="cohort.csv",
+            status="completed",
+        )
+        db.session.add(batch)
+        db.session.flush()
+        brow = MintBatchRow(
+            batch_id=batch.id,
+            row_index=0,
+            cert_id="CERT-OLD",
+            student_internal_id="STU-42",
+            student_email="student@reissue.edu",
+            student_full_name="Pat Lee",
+            degree_title="BSc",
+            row_status="mint_confirmed",
+            token_id=old_tid,
+        )
+        db.session.add(brow)
+        db.session.commit()
+
+        api_mod._propagate_reissue_claim_continuity(old_token_id=old_tid, new_token_id=new_tid)
+        db.session.commit()
+
+        db.session.refresh(brow)
+        new_rec = CertificateRecord.query.filter_by(token_id=new_tid).first()
+        self.assertEqual(brow.token_id, new_tid)
+        self.assertEqual(brow.cert_id, "CERT-NEW")
+        self.assertEqual(new_rec.student_internal_id, "STU-42")
+        self.assertEqual(new_rec.student_email, "student@reissue.edu")
+
+        matched_row = _find_mint_row_for_student(
+            university_id=uni.id, student_internal_id="STU-42", email="student@reissue.edu"
+        )
+        self.assertIsNotNone(matched_row)
+        self.assertEqual(matched_row.token_id, new_tid)
+
+        matched_cert = _find_single_certificate_for_student(
+            university_id=uni.id, student_internal_id="STU-42", email="student@reissue.edu"
+        )
+        self.assertIsNotNone(matched_cert)
+        self.assertEqual(matched_cert.token_id, new_tid)
+        self._cleanup_reissue_claim_fixtures()
+
+    def test_public_claim_create_single_mint_null_safe_after_reissue(self) -> None:
+        """Single-mint claim path must not crash when mint_batch_row is absent."""
+        from app.services import blockchain_service, notification_service
+
+        self._cleanup_reissue_claim_fixtures()
+        uni = self._seed_reissue_claim_university()
+        db.session.add(
+            CertificateRecord(
+                token_id=303,
+                university_id=uni.id,
+                cert_id="CERT-SM-REISSUE",
+                ipfs_uri="ipfs://sm",
+                status="issued",
+                student_internal_id="SM-7",
+                student_email="sm@reissue.edu",
+            )
+        )
+        db.session.commit()
+
+        with patch.object(blockchain_service, "escrow_claim_eligibility", return_value=(True, None)):
+            with patch.object(notification_service, "notify_university_users", return_value=0):
+                r = self.client.post(
+                    "/api/public/student-claim-requests",
+                    json={
+                        "university_id": uni.id,
+                        "student_internal_id": "SM-7",
+                        "student_email": "sm@reissue.edu",
+                        "wallet_address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                    },
+                )
+        self.assertEqual(r.status_code, 201, r.get_data(as_text=True))
+        body = r.get_json() or {}
+        self.assertEqual(body.get("token_id"), 303)
+        created = StudentClaimRequest.query.filter_by(token_id=303).first()
+        self.assertIsNotNone(created)
+        self.assertIsNone(created.mint_batch_row_id)
+        self.assertEqual(created.cert_id, "CERT-SM-REISSUE")
+        self._cleanup_reissue_claim_fixtures()
 
 
 if __name__ == "__main__":

@@ -77,6 +77,9 @@ def _find_single_certificate_for_student(
     return rows[0] if rows else None
 
 
+_SUPERSEDED_CERT_STATUSES = frozenset({"reissued", "revoked", "burned"})
+
+
 def _find_mint_row_for_student(*, university_id: int, student_internal_id: str, email: str) -> MintBatchRow | None:
     sid = student_internal_id.strip()
     em = email.strip().lower()
@@ -94,7 +97,13 @@ def _find_mint_row_for_student(*, university_id: int, student_internal_id: str, 
         .order_by(MintBatchRow.id.desc())
     )
     rows = q.all()
-    return rows[0] if rows else None
+    for r in rows:
+        crec = CertificateRecord.query.filter_by(token_id=int(r.token_id)).first()
+        if crec and (crec.status or "").strip().lower() in _SUPERSEDED_CERT_STATUSES:
+            # Prefer a later row / single-mint fallback over a revoked or reissued token.
+            continue
+        return r
+    return None
 
 
 def register_student_claim_routes(bp: Blueprint) -> None:
@@ -161,11 +170,18 @@ def register_student_claim_routes(bp: Blueprint) -> None:
         if open_req:
             return ({"error": "A claim request for this credential is already open."}, 409)
 
+        used_row = row if row is not None and row.token_id is not None else None
+        cert_id_val = None
+        if used_row and (used_row.cert_id or "").strip():
+            cert_id_val = used_row.cert_id.strip()
+        elif cert_rec and (cert_rec.cert_id or "").strip():
+            cert_id_val = cert_rec.cert_id.strip()
+
         rec = StudentClaimRequest(
             university_id=university_id,
-            mint_batch_row_id=row.id,
+            mint_batch_row_id=used_row.id if used_row else None,
             token_id=tid,
-            cert_id=(row.cert_id or "").strip() or None,
+            cert_id=cert_id_val,
             student_internal_id=student_internal_id.strip(),
             student_email=student_email.strip().lower(),
             wallet_address=wallet,
