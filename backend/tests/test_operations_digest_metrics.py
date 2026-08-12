@@ -372,6 +372,79 @@ class OperationsDigestMetricsTests(unittest.TestCase):
         mock_mint.assert_not_called()
         self._cleanup_mint_fixtures()
 
+    def test_reset_prepare_clears_batch_authorization(self) -> None:
+        import app.mint_batch_routes as batch_mod
+
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        core_hash = "0x" + "b" * 64
+        batch = MintBatch(
+            university_id=uni.id,
+            status="authorized",
+            original_filename="auth-clear.csv",
+            total_rows=1,
+            valid_rows=1,
+            invalid_rows=0,
+            created_by_user_id=user.id,
+            authorized_signature_hex="0x" + "2" * 130,
+            authorized_digest_hex="0x" + "3" * 64,
+            authorized_commitment_hex="0x" + "4" * 64,
+            authorized_payload_json="[]",
+            authorized_nonce_snapshot=0,
+            authorized_expiry_unix=9999999999,
+        )
+        db.session.add(batch)
+        db.session.flush()
+        row = MintBatchRow(
+            batch_id=batch.id,
+            row_index=1,
+            cert_id="CERT-AUTH-CLEAR",
+            student_full_name="Pat Lee",
+            degree_title="BSc CS",
+            issue_date="2024-06-15",
+            row_status="prepared",
+            metadata_uri="ipfs://authorized-metadata",
+            core_hash=core_hash,
+            prepared_at=datetime.utcnow(),
+        )
+        db.session.add(row)
+        db.session.flush()
+        db.session.add(
+            CertificateRecord(
+                token_id=502,
+                university_id=uni.id,
+                cert_id=row.cert_id,
+                ipfs_uri=row.metadata_uri,
+                core_hash=core_hash,
+                status="prepared",
+            )
+        )
+        db.session.commit()
+
+        with patch.object(batch_mod.blockchain_service, "get_w3", return_value=MagicMock()):
+            with patch.object(batch_mod.blockchain_service, "get_contract", return_value=MagicMock()):
+                with patch.object(batch_mod, "_require_contract_code", return_value=None):
+                    with patch.object(
+                        batch_mod.blockchain_service,
+                        "read_certificate_public",
+                        return_value={"exists": False},
+                    ):
+                        r = self.client.post(
+                            f"/api/university/mint-batches/{batch.id}/rows/{row.id}/reset-prepare",
+                            headers=self._uni_jwt_single_mint(user),
+                        )
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        body = r.get_json() or {}
+        self.assertTrue(body.get("authorization_cleared"))
+        db.session.refresh(batch)
+        db.session.refresh(row)
+        self.assertIsNone(batch.authorized_signature_hex)
+        self.assertIsNone(batch.authorized_payload_json)
+        self.assertEqual(batch.status, "processing")
+        self.assertEqual(row.row_status, "pending_validation")
+        self.assertIsNone(row.metadata_uri)
+        self._cleanup_mint_fixtures()
+
 
 if __name__ == "__main__":
     unittest.main()
