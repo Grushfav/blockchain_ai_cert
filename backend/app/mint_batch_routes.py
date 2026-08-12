@@ -967,6 +967,8 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 return jsonify({"error": f"Row {row.id} cert_id changed since authorization"}), 409
             if str(row.core_hash or "").strip() != str(ent.get("core_hash") or "").strip():
                 return jsonify({"error": f"Row {row.id} core_hash changed since authorization"}), 409
+            if str(row.metadata_uri or "").strip() != str(ent.get("metadata_uri") or "").strip():
+                return jsonify({"error": f"Row {row.id} metadata_uri changed since authorization"}), 409
             if row.row_status != "prepared":
                 return jsonify({"error": f"Row {row.row_index} is not prepared (status {row.row_status})"}), 400
 
