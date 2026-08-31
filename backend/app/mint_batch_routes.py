@@ -696,9 +696,25 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         row.prepared_at = None
         row.row_status = "pending_validation"
         row.error_message = None
+        # Clearing prepare after wallet authorization would let a later re-prepare mint a different
+        # metadata_uri under the old signature (commitment binds only cert_id+core_hash). Invalidate.
+        auth_cleared = bool((b.authorized_signature_hex or "").strip())
+        if auth_cleared:
+            b.authorized_signature_hex = None
+            b.authorized_digest_hex = None
+            b.authorized_commitment_hex = None
+            b.authorized_row_ids_json = None
+            b.authorized_payload_json = None
+            b.authorized_nonce_snapshot = None
+            b.authorized_expiry_unix = None
+            if (b.status or "").lower() == "authorized":
+                b.status = "processing"
         b.updated_at = datetime.utcnow()
         db.session.commit()
-        return jsonify({"message": "Prepare state cleared. You can prepare this row again."})
+        msg = "Prepare state cleared. You can prepare this row again."
+        if auth_cleared:
+            msg += " Batch wallet authorization was cleared; rebuild EIP-712 and re-sign before execute."
+        return jsonify({"message": msg, "authorization_cleared": auth_cleared})
 
     @bp.get("/university/mint-batches/<int:batch_id>/eip712")
     @jwt_required()
@@ -967,6 +983,8 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 return jsonify({"error": f"Row {row.id} cert_id changed since authorization"}), 409
             if str(row.core_hash or "").strip() != str(ent.get("core_hash") or "").strip():
                 return jsonify({"error": f"Row {row.id} core_hash changed since authorization"}), 409
+            if str(row.metadata_uri or "").strip() != str(ent.get("metadata_uri") or "").strip():
+                return jsonify({"error": f"Row {row.id} metadata_uri changed since authorization"}), 409
             if row.row_status != "prepared":
                 return jsonify({"error": f"Row {row.row_index} is not prepared (status {row.row_status})"}), 400
 
