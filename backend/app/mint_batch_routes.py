@@ -496,8 +496,17 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         if not b:
             return jsonify({"error": "Batch not found"}), 404
         status_filter = (request.args.get("status") or "").strip()
-        limit = min(max(int(request.args.get("limit", 50)), 1), 200)
-        offset = max(int(request.args.get("offset", 0)), 0)
+        max_limit = max(int(Config.MINT_BATCH_MAX_ROWS), 1)
+        try:
+            requested = int(request.args.get("limit", 50))
+        except (TypeError, ValueError):
+            requested = 50
+        try:
+            offset = int(request.args.get("offset", 0))
+        except (TypeError, ValueError):
+            offset = 0
+        limit = min(max(requested, 1), max_limit)
+        offset = max(offset, 0)
         q = MintBatchRow.query.filter_by(batch_id=batch_id)
         if status_filter:
             q = q.filter_by(row_status=status_filter)

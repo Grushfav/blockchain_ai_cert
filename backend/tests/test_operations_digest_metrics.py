@@ -7,7 +7,15 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -154,6 +162,8 @@ class OperationsDigestMetricsTests(unittest.TestCase):
     def _cleanup_mint_fixtures(self) -> None:
         MintAuthorizationRequest.query.delete()
         CertificateRecord.query.delete()
+        MintBatchRow.query.delete()
+        MintBatch.query.delete()
         User.query.filter(User.email == "singlemint@example.edu").delete(synchronize_session=False)
         University.query.filter_by(internal_id="single-mint-test-uni").delete(synchronize_session=False)
         db.session.commit()
@@ -287,6 +297,51 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+    def test_list_mint_batch_rows_returns_full_upload_capacity(self) -> None:
+        """Portal prepare-all reads this list; a 200-row cap deadlocks batches within MINT_BATCH_MAX_ROWS."""
+        self._cleanup_mint_fixtures()
+        uni, user = self._seed_verified_university_single_mint()
+        n = 201
+        batch = MintBatch(
+            university_id=uni.id,
+            status="validated",
+            original_filename="grad-201.csv",
+            created_by_user_id=user.id,
+            total_rows=n,
+            valid_rows=n,
+            invalid_rows=0,
+        )
+        db.session.add(batch)
+        db.session.flush()
+        for i in range(n):
+            db.session.add(
+                MintBatchRow(
+                    batch_id=batch.id,
+                    row_index=i,
+                    cert_id=f"CERT-{i:04d}",
+                    student_internal_id=f"SID-{i}",
+                    student_email=f"s{i}@example.edu",
+                    student_full_name=f"Student {i}",
+                    degree_title="BSc",
+                    issue_date="2026-06-01",
+                    row_status="pending_validation",
+                )
+            )
+        db.session.commit()
+
+        headers = self._uni_jwt_single_mint(user)
+        r = self.client.get(
+            f"/api/university/mint-batches/{batch.id}/rows?limit=500",
+            headers=headers,
+        )
+        self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+        body = r.get_json() or {}
+        self.assertEqual(body.get("total"), n)
+        self.assertEqual(len(body.get("rows") or []), n)
+        self.assertEqual((body.get("rows") or [])[-1].get("row_index"), n - 1)
+        self.assertGreaterEqual(int(body.get("limit") or 0), n)
+        self._cleanup_mint_fixtures()
 
 
 if __name__ == "__main__":

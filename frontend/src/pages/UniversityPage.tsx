@@ -753,10 +753,21 @@ export function UniversityPage() {
       return;
     }
     try {
-      const data = await apiJson<{ rows: BatchRow[] }>(
-        `/api/university/mint-batches/${id}/rows?limit=500`
-      );
-      setQueueRows(data.rows);
+      const pageSize = 500;
+      const all: BatchRow[] = [];
+      let offset = 0;
+      let total = Number.POSITIVE_INFINITY;
+      while (offset < total) {
+        const data = await apiJson<{ rows: BatchRow[]; total: number; limit: number }>(
+          `/api/university/mint-batches/${id}/rows?limit=${pageSize}&offset=${offset}`
+        );
+        const page = data.rows ?? [];
+        all.push(...page);
+        total = typeof data.total === "number" ? data.total : all.length;
+        if (page.length === 0 || all.length >= total) break;
+        offset += page.length;
+      }
+      setQueueRows(all);
     } catch {
       setQueueRows([]);
       setBatchErr("Could not refresh batch rows. Check backend is running and you are logged in.");
