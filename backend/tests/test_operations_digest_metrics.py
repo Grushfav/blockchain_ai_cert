@@ -1,5 +1,6 @@
 """Unit tests for platform operations digest aggregates and Gemini /verify/explain cache."""
 
+import json
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
@@ -7,7 +8,15 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    MintBatch,
+    MintBatchRow,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -152,11 +161,15 @@ class OperationsDigestMetricsTests(unittest.TestCase):
     # --- Single-mint HTTPS metadata (same app/db lifecycle as class; must run before tearDownClass drop_all) ---
 
     def _cleanup_mint_fixtures(self) -> None:
+        db.session.rollback()
         MintAuthorizationRequest.query.delete()
+        MintBatchRow.query.delete()
+        MintBatch.query.delete()
         CertificateRecord.query.delete()
         User.query.filter(User.email == "singlemint@example.edu").delete(synchronize_session=False)
         University.query.filter_by(internal_id="single-mint-test-uni").delete(synchronize_session=False)
         db.session.commit()
+        db.session.expunge_all()
 
     def _seed_verified_university_single_mint(self) -> tuple[University, User]:
         uni = University(
@@ -286,6 +299,137 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_KID = orig_kid
             app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
+            self._cleanup_mint_fixtures()
+
+    def _core(self, n: int) -> str:
+        return "0x" + f"{n:064x}"
+
+    def _seed_authorized_three_row_batch(self, uni: University, user: User) -> MintBatch:
+        batch = MintBatch(
+            university_id=uni.id,
+            status="authorized",
+            original_filename="class.csv",
+            created_by_user_id=user.id,
+            total_rows=3,
+            valid_rows=3,
+            invalid_rows=0,
+            authorized_commitment_hex="0x" + "ab" * 32,
+            authorized_signature_hex="0x" + "cd" * 65,
+            authorized_nonce_snapshot=0,
+            authorized_expiry_unix=2_000_000_000,
+        )
+        db.session.add(batch)
+        db.session.flush()
+        hashes = [self._core(1), self._core(2), self._core(3)]
+        rows: list[MintBatchRow] = []
+        for i, h in enumerate(hashes):
+            row = MintBatchRow(
+                batch_id=batch.id,
+                row_index=i,
+                cert_id=f"CERT-B-{i}",
+                student_internal_id=f"SID-{i}",
+                student_email=f"s{i}@example.edu",
+                student_full_name=f"Student {i}",
+                degree_title="BSc",
+                issue_date="2024-06-01",
+                row_status="prepared",
+                metadata_uri=f"ipfs://cid-{i}",
+                core_hash=h,
+            )
+            db.session.add(row)
+            rows.append(row)
+        db.session.flush()
+        batch.authorized_row_ids_json = json.dumps([r.id for r in rows])
+        batch.authorized_payload_json = json.dumps(
+            [
+                {
+                    "row_id": r.id,
+                    "row_index": r.row_index,
+                    "cert_id": r.cert_id,
+                    "core_hash": r.core_hash,
+                    "metadata_uri": r.metadata_uri,
+                    "expected_token_id": i + 1,
+                }
+                for i, r in enumerate(rows)
+            ]
+        )
+        db.session.commit()
+        return batch
+
+    def _execute_with_mocked_chain(self, headers: dict[str, str], batch_id: int):
+        import app.mint_batch_routes as mbr
+
+        minted_ids = {"n": 10}
+
+        def _mint(*_a, **_k):
+            minted_ids["n"] += 1
+            tid = minted_ids["n"]
+            return tid, f"0x{tid:064x}"
+
+        with patch.object(mbr, "_require_contract_code", return_value=None):
+            with patch.object(mbr.blockchain_service, "get_w3", return_value=MagicMock()):
+                with patch.object(mbr.blockchain_service, "get_contract", return_value=MagicMock()):
+                    with patch.object(
+                        mbr.blockchain_service,
+                        "minter_account_address",
+                        return_value="0x00000000000000000000000000000000000000aa",
+                    ):
+                        with patch.object(mbr.blockchain_service, "mint_for_issuer", side_effect=_mint):
+                            with patch.object(mbr, "_verify_certificate_mint_receipt", return_value=(True, "")):
+                                return self.client.post(
+                                    f"/api/university/mint-batches/{batch_id}/execute",
+                                    json={"max_mints": 40},
+                                    headers=headers,
+                                )
+
+    def test_execute_skips_mint_failed_row_and_mints_later_prepared_rows(self) -> None:
+        """A failed first row must not abort execute of the rest of an authorized batch."""
+        self._cleanup_mint_fixtures()
+        try:
+            uni, user = self._seed_verified_university_single_mint()
+            batch = self._seed_authorized_three_row_batch(uni, user)
+            first = MintBatchRow.query.filter_by(batch_id=batch.id, row_index=0).one()
+            first.row_status = "mint_failed"
+            first.error_message = "rpc timeout"
+            db.session.commit()
+
+            r = self._execute_with_mocked_chain(self._uni_jwt_single_mint(user), batch.id)
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            body = r.get_json() or {}
+            minted_certs = {m["row_id"] for m in body.get("minted") or []}
+            later = MintBatchRow.query.filter_by(batch_id=batch.id).filter(MintBatchRow.row_index > 0).all()
+            self.assertEqual(minted_certs, {row.id for row in later})
+            self.assertEqual(body.get("remaining_rows"), 0)
+            first = MintBatchRow.query.filter_by(batch_id=batch.id, row_index=0).one()
+            self.assertEqual(first.row_status, "mint_failed")
+            for row in later:
+                self.assertIn(row.row_status, ("mint_confirmed", "email_sent", "email_failed"))
+        finally:
+            self._cleanup_mint_fixtures()
+
+    def test_execute_skips_reset_prepare_row_with_cleared_core_hash(self) -> None:
+        """Reset-prepare clears core_hash; execute must still mint other prepared rows."""
+        self._cleanup_mint_fixtures()
+        try:
+            uni, user = self._seed_verified_university_single_mint()
+            batch = self._seed_authorized_three_row_batch(uni, user)
+            first = MintBatchRow.query.filter_by(batch_id=batch.id, row_index=0).one()
+            first.row_status = "pending_validation"
+            first.core_hash = None
+            first.metadata_uri = None
+            db.session.commit()
+
+            r = self._execute_with_mocked_chain(self._uni_jwt_single_mint(user), batch.id)
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            body = r.get_json() or {}
+            self.assertEqual(len(body.get("minted") or []), 2)
+            self.assertEqual(body.get("remaining_rows"), 0)
+            first = MintBatchRow.query.filter_by(batch_id=batch.id, row_index=0).one()
+            self.assertEqual(first.row_status, "pending_validation")
+            later = MintBatchRow.query.filter_by(batch_id=batch.id).filter(MintBatchRow.row_index > 0).all()
+            for row in later:
+                self.assertIn(row.row_status, ("mint_confirmed", "email_sent", "email_failed"))
+        finally:
             self._cleanup_mint_fixtures()
 
 

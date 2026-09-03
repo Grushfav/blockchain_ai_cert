@@ -963,12 +963,14 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
                 continue
             if row.row_status == "invalid":
                 continue
+            # mint_failed / pending_validation (reset-prepare) must not abort the rest of
+            # the authorized snapshot. Hash checks only apply to rows we are about to mint.
+            if row.row_status != "prepared":
+                continue
             if str(row.cert_id or "").strip() != str(ent.get("cert_id") or "").strip():
                 return jsonify({"error": f"Row {row.id} cert_id changed since authorization"}), 409
             if str(row.core_hash or "").strip() != str(ent.get("core_hash") or "").strip():
                 return jsonify({"error": f"Row {row.id} core_hash changed since authorization"}), 409
-            if row.row_status != "prepared":
-                return jsonify({"error": f"Row {row.row_index} is not prepared (status {row.row_status})"}), 400
 
             prep_at_snapshot = row.prepared_at
             chain_t0 = time.perf_counter()
@@ -1172,7 +1174,7 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
         remaining = 0
         for ent in payload:
             rr = MintBatchRow.query.filter_by(id=int(ent["row_id"]), batch_id=batch_id).first()
-            if rr and rr.row_status not in ("mint_confirmed", "email_sent", "email_failed"):
+            if rr and rr.row_status == "prepared":
                 remaining += 1
 
         b.status = "executing" if b.status == "authorized" else b.status
