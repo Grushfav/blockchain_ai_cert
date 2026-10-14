@@ -67,6 +67,9 @@ class University(db.Model):
     is_frozen = db.Column(db.Boolean, nullable=False, default=False, server_default=expression.false())
     frozen_reason = db.Column(db.Text, nullable=True)
     frozen_at = db.Column(db.DateTime, nullable=True)
+    # Last block fully scanned by activity sync. Mint handlers also insert ActivityLog
+    # rows; those must not advance this cursor or events between mints are skipped.
+    activity_sync_block = db.Column(db.Integer, nullable=True)
 
     users = db.relationship("User", back_populates="university", lazy="dynamic")
     certificates = db.relationship("CertificateRecord", back_populates="university")

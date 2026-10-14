@@ -1812,6 +1812,33 @@ def _safe_event_logs(
     return logs
 
 
+# Per-request cap. Larger catch-up continues on the next sync from activity_sync_block.
+# 20_000 blocks is about 11 hours on a ~2s chain and stays within a handful of log windows.
+ACTIVITY_SYNC_MAX_BLOCKS = 20_000
+
+
+def _activity_sync_default_from(uni: University, chain_head: int) -> int:
+    """Block to start scanning when the client does not pass from_block.
+
+    Mint submit/execute insert ActivityLog rows at the mint block. Using
+    max(ActivityLog.block_number)+1 as the cursor skips claims, revokes, burns,
+    and reissues that were confirmed after the previous sync but before a later
+    mint log. The saved cursor is the only high-water mark.
+    """
+    saved = getattr(uni, "activity_sync_block", None)
+    if saved is not None:
+        return int(saved) + 1
+    latest = (
+        db.session.query(db.func.max(ActivityLog.block_number))
+        .filter(ActivityLog.university_id == uni.id)
+        .scalar()
+    )
+    head = max(0, int(chain_head))
+    if latest is None:
+        return max(0, head - ACTIVITY_SYNC_MAX_BLOCKS + 1)
+    return max(0, int(latest) + 1 - ACTIVITY_SYNC_MAX_BLOCKS)
+
+
 @bp.post("/university/activity/sync")
 @jwt_required()
 def sync_university_activity():
@@ -1826,22 +1853,36 @@ def sync_university_activity():
     if g:
         return g
 
-    latest_synced = (
-        db.session.query(db.func.max(ActivityLog.block_number))
-        .filter(ActivityLog.university_id == uni.id)
-        .scalar()
-    )
-    default_from = int(latest_synced) + 1 if latest_synced is not None else 0
-    from_block = int(request.args.get("from_block", default_from))
+    raw_from = request.args.get("from_block")
+    requested_from: int | None
+    if raw_from is None or str(raw_from).strip() == "":
+        requested_from = None
+    else:
+        try:
+            requested_from = int(str(raw_from).strip())
+        except ValueError:
+            return jsonify({"error": "from_block must be an integer"}), 400
     try:
         w3 = blockchain_service.get_w3()
         cfg_err = _require_contract_code(w3)
         if cfg_err:
             return jsonify({"error": cfg_err}), 503
         contract = blockchain_service.get_contract(w3)
-        to_block = int(w3.eth.block_number)
+        chain_head = int(w3.eth.block_number)
     except Exception as e:
         return jsonify({"error": f"Contract configuration error: {e!s}"}), 502
+    default_from = _activity_sync_default_from(uni, chain_head)
+    from_block = default_from if requested_from is None else max(0, requested_from)
+    if from_block > chain_head:
+        return jsonify(
+            {
+                "synced_events": 0,
+                "latest_block": chain_head,
+                "from_block": from_block,
+                "synced_through_block": uni.activity_sync_block,
+            }
+        )
+    to_block = min(chain_head, from_block + ACTIVITY_SYNC_MAX_BLOCKS - 1)
     wallet = Web3.to_checksum_address(uni.wallet_address)
 
     synced = 0
@@ -1981,8 +2022,19 @@ def sync_university_activity():
         )
         synced += 1
 
+    # Only the unscoped sync advances the cursor. An explicit from_block can
+    # backfill logs without moving the high-water mark past a gap or rewinding it.
+    if requested_from is None:
+        uni.activity_sync_block = to_block
     db.session.commit()
-    return jsonify({"synced_events": synced, "latest_block": to_block, "from_block": from_block})
+    return jsonify(
+        {
+            "synced_events": synced,
+            "latest_block": chain_head,
+            "from_block": from_block,
+            "synced_through_block": uni.activity_sync_block,
+        }
+    )
 
 
 @bp.get("/verify/<int:token_id>")
