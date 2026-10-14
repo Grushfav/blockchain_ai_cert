@@ -288,6 +288,135 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
 
+    def test_activity_sync_cursor_keeps_events_between_mints(self) -> None:
+        """A later mint ActivityLog must not advance the sync cursor past an unsynced claim or revoke."""
+        from app.routes import api as api_mod
+
+        wallet = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+        uni = University(
+            name="Sync Cursor Uni",
+            internal_id="activity-sync-cursor-uni",
+            domain_email="sync.example.edu",
+            wallet_address=wallet,
+            status="verified",
+            eip712_nonce=0,
+            eip712_single_nonce=0,
+            eip712_batch_nonce=0,
+        )
+        db.session.add(uni)
+        db.session.flush()
+        user = User(email="sync-cursor@example.edu", role="university", university_id=uni.id)
+        user.set_password("testpass123")
+        db.session.add(user)
+        db.session.add(
+            ActivityLog(
+                university_id=uni.id,
+                token_id=7,
+                action="issued",
+                tx_hash=_tx(7001),
+                log_index=0,
+                block_number=1000,
+                actor=wallet,
+            )
+        )
+        db.session.commit()
+        headers = self._uni_jwt_single_mint(user)
+
+        class _Hex:
+            def __init__(self, value: str) -> None:
+                self._value = value
+
+            def hex(self) -> str:
+                return self._value
+
+        claim_ev = {
+            "args": {"tokenId": 7, "from": wallet, "student": "0x" + "11" * 20},
+            "transactionHash": _Hex(_tx(7100)),
+            "logIndex": 1,
+            "blockNumber": 1100,
+        }
+        revoke_ev = {
+            "args": {"tokenId": 7},
+            "transactionHash": _Hex(_tx(7250)),
+            "logIndex": 2,
+            "blockNumber": 1250,
+        }
+        minted_event = object()
+        claimed_event = object()
+        revoked_event = object()
+        burned_event = object()
+        reissued_event = object()
+        contract = MagicMock()
+        contract.events.CertificateMinted = minted_event
+        contract.events.CertificateClaimed = claimed_event
+        contract.events.CertificateRevoked = revoked_event
+        contract.events.CertificateBurned = burned_event
+        contract.events.CertificateReissued = reissued_event
+        contract.functions.issuerOf.return_value.call.return_value = wallet
+        scanned_from: list[int] = []
+
+        def fake_logs(event: object, *, from_block: int, to_block: int, argument_filters: object = None, step: int = 2000):
+            del argument_filters, step
+            scanned_from.append(from_block)
+            if event is claimed_event and from_block <= 1100 <= to_block:
+                return [claim_ev]
+            if event is revoked_event and from_block <= 1250 <= to_block:
+                return [revoke_ev]
+            return []
+
+        w3 = MagicMock()
+        w3.eth.block_number = 1200
+        try:
+            with patch.object(api_mod, "_require_contract_code", return_value=None):
+                with patch.object(api_mod.blockchain_service, "get_w3", return_value=w3):
+                    with patch.object(api_mod.blockchain_service, "get_contract", return_value=contract):
+                        with patch.object(api_mod, "_safe_event_logs", side_effect=fake_logs):
+                            first = self.client.post("/api/university/activity/sync", headers=headers)
+                            self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+                            body = first.get_json() or {}
+                            self.assertLessEqual(body.get("from_block"), 1100)
+                            self.assertEqual(body.get("synced_through_block"), 1200)
+                            self.assertEqual(
+                                ActivityLog.query.filter_by(university_id=uni.id, action="transferred").count(),
+                                1,
+                            )
+
+                            db.session.add(
+                                ActivityLog(
+                                    university_id=uni.id,
+                                    token_id=8,
+                                    action="issued",
+                                    tx_hash=_tx(7300),
+                                    log_index=0,
+                                    block_number=1300,
+                                    actor=wallet,
+                                )
+                            )
+                            db.session.commit()
+                            w3.eth.block_number = 1400
+                            scanned_from.clear()
+                            second = self.client.post("/api/university/activity/sync", headers=headers)
+                            self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+                            self.assertTrue(scanned_from)
+                            self.assertEqual(scanned_from[0], 1201)
+                            self.assertEqual(
+                                ActivityLog.query.filter_by(university_id=uni.id, action="revoked").count(),
+                                1,
+                            )
+                            refreshed = db.session.get(University, uni.id)
+                            assert refreshed is not None
+                            self.assertEqual(refreshed.activity_sync_block, 1400)
+                            revoked = CertificateRecord.query.filter_by(token_id=7).first()
+                            self.assertIsNotNone(revoked)
+                            assert revoked is not None
+                            self.assertEqual(revoked.status, "revoked")
+        finally:
+            CertificateRecord.query.filter_by(university_id=uni.id).delete(synchronize_session=False)
+            ActivityLog.query.filter_by(university_id=uni.id).delete(synchronize_session=False)
+            User.query.filter_by(email="sync-cursor@example.edu").delete(synchronize_session=False)
+            University.query.filter_by(internal_id="activity-sync-cursor-uni").delete(synchronize_session=False)
+            db.session.commit()
+
 
 if __name__ == "__main__":
     unittest.main()

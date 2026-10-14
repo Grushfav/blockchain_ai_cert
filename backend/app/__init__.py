@@ -163,6 +163,8 @@ def _apply_lightweight_migrations() -> None:
         statements.append("ALTER TABLE universities ADD COLUMN frozen_reason TEXT")
     if "frozen_at" not in uni_cols:
         statements.append("ALTER TABLE universities ADD COLUMN frozen_at TIMESTAMP")
+    if "activity_sync_block" not in uni_cols:
+        statements.append("ALTER TABLE universities ADD COLUMN activity_sync_block INTEGER")
 
     mb_cols = {c["name"] for c in inspector.get_columns("mint_batches")}
     _mb_add = [
