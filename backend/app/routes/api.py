@@ -1483,12 +1483,13 @@ def submit_mint_authorization():
     platform_mint_ms = int((time.perf_counter() - chain_t0) * 1000)
 
     now_utc = datetime.utcnow()
-    prepare_to_complete_ms = None
-    if req.created_at:
-        prepare_to_complete_ms = max(0, int((now_utc - req.created_at).total_seconds() * 1000))
+    # Signed 32-bit columns. An out-of-range duration aborts this commit after mintForIssuer.
+    from app.mint_batch_routes import clamp_signed_int32, elapsed_ms_for_int_column
+
+    prepare_to_complete_ms = elapsed_ms_for_int_column(req.created_at, now_utc)
     req.completed_at = now_utc
     req.prepare_to_complete_ms = prepare_to_complete_ms
-    req.platform_mint_ms = platform_mint_ms
+    req.platform_mint_ms = clamp_signed_int32(platform_mint_ms)
 
     notification_service.notify_university_users(
         uni.id,

@@ -29,6 +29,26 @@ from app.services import (
 from app.university_freeze import freeze_guard_response, sync_uni_eip712_watermark
 
 BATCH_ROW_AI_MAX_QUESTION_CHARS = 500
+# PostgreSQL INTEGER is signed 32-bit. Advisory durations are stored in these columns;
+# a value above this aborts the mint commit after the chain transaction has already landed.
+_SIGNED_INT32_MAX = 2_147_483_647
+
+
+def clamp_signed_int32(value: int) -> int:
+    """Fit a millisecond duration into a signed 32-bit integer column."""
+    if value < 0:
+        return 0
+    if value > _SIGNED_INT32_MAX:
+        return _SIGNED_INT32_MAX
+    return value
+
+
+def elapsed_ms_for_int_column(start: datetime | None, end: datetime | None) -> int | None:
+    """Milliseconds between two timestamps, saturated at the PostgreSQL INTEGER maximum."""
+    if start is None or end is None:
+        return None
+    raw = int((end - start).total_seconds() * 1000)
+    return clamp_signed_int32(raw)
 
 # Late-bound to avoid circular import: set by register_mint_batch_routes
 _api_bp: Blueprint | None = None
@@ -949,8 +969,8 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             """Persist wall time for this execute POST (partial or full). Call before commit."""
             cw = int((time.perf_counter() - execute_chunk_start) * 1000)
             if processed > 0:
-                b.last_execute_chunk_wall_ms = cw
-                b.cumulative_execute_wall_ms = int(b.cumulative_execute_wall_ms or 0) + cw
+                b.last_execute_chunk_wall_ms = clamp_signed_int32(cw)
+                b.cumulative_execute_wall_ms = clamp_signed_int32(int(b.cumulative_execute_wall_ms or 0) + cw)
             return cw
 
         for ent in sorted(payload, key=lambda x: int(x.get("row_index", 0))):
@@ -1147,10 +1167,8 @@ def register_mint_batch_routes(bp: Blueprint) -> None:
             else:
                 row.row_status = "mint_confirmed"
 
-            platform_ms = int((time.perf_counter() - chain_t0) * 1000)
-            prep_to_mint_ms = None
-            if prep_at_snapshot and row.minted_at:
-                prep_to_mint_ms = max(0, int((row.minted_at - prep_at_snapshot).total_seconds() * 1000))
+            platform_ms = clamp_signed_int32(int((time.perf_counter() - chain_t0) * 1000))
+            prep_to_mint_ms = elapsed_ms_for_int_column(prep_at_snapshot, row.minted_at)
             row.prepare_to_mint_ms = prep_to_mint_ms
             row.platform_mint_ms = platform_ms
 
