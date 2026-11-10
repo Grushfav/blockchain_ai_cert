@@ -202,10 +202,29 @@ def register_student_claim_routes(bp: Blueprint) -> None:
         if not user.university_id:
             abort(403)
         status_filter = (request.args.get("status") or "").strip().lower()
-        q = StudentClaimRequest.query.filter_by(university_id=int(user.university_id))
+        base = StudentClaimRequest.query.filter_by(university_id=int(user.university_id))
+        # Open requests (pending/approved) block a new claim for that token. The portal
+        # loads this list with no status filter, so a newest-200 cap hides those rows
+        # once terminal history fills the window and staff can never approve or reject them.
         if status_filter:
-            q = q.filter_by(status=status_filter)
-        rows = q.order_by(StudentClaimRequest.created_at.desc()).limit(200).all()
+            q = base.filter_by(status=status_filter)
+            if status_filter in ACTIVE_STATUSES:
+                rows = q.order_by(StudentClaimRequest.created_at.asc()).all()
+            else:
+                rows = q.order_by(StudentClaimRequest.created_at.desc()).limit(200).all()
+        else:
+            actionable = (
+                base.filter(StudentClaimRequest.status.in_(tuple(ACTIVE_STATUSES)))
+                .order_by(StudentClaimRequest.created_at.asc())
+                .all()
+            )
+            history = (
+                base.filter(StudentClaimRequest.status.notin_(tuple(ACTIVE_STATUSES)))
+                .order_by(StudentClaimRequest.created_at.desc())
+                .limit(200)
+                .all()
+            )
+            rows = list(actionable) + list(history)
         out = []
         for r in rows:
             row = r.mint_batch_row if r.mint_batch_row_id else None

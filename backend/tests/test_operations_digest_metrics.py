@@ -7,7 +7,14 @@ from unittest.mock import MagicMock, patch
 from app import create_app
 from app.config import Config
 from app.extensions import db
-from app.models import ActivityLog, CertificateRecord, MintAuthorizationRequest, University, User
+from app.models import (
+    ActivityLog,
+    CertificateRecord,
+    MintAuthorizationRequest,
+    StudentClaimRequest,
+    University,
+    User,
+)
 from app.services import ai_response_cache, analytics_service, gemini_service
 
 
@@ -287,6 +294,83 @@ class OperationsDigestMetricsTests(unittest.TestCase):
             app_config.Config.TRUECERT_SIG_PRIVATE_KEY = orig_priv
             app_config.Config.TRUECERT_SIG_PUBLIC_KEYS = orig_pubkeys
             self._cleanup_mint_fixtures()
+
+
+    def test_claim_list_keeps_open_requests_past_history_cap(self) -> None:
+        """Open claims must stay visible after newer terminal rows fill the history window.
+
+        The portal lists this endpoint with no status filter. A hard cap of the 200 newest
+        rows drops older pending requests, and those rows still block a new claim for the token.
+        """
+        uni = University(
+            name="Claim Queue Uni",
+            internal_id="claim-queue-uni",
+            domain_email="claims.example.edu",
+            wallet_address="0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+            status="verified",
+            eip712_nonce=0,
+            eip712_single_nonce=0,
+            eip712_batch_nonce=0,
+        )
+        db.session.add(uni)
+        db.session.flush()
+        user = User(email="claims@example.edu", role="university", university_id=uni.id)
+        user.set_password("testpass123")
+        db.session.add(user)
+        base = datetime(2026, 1, 1)
+        pending = StudentClaimRequest(
+            university_id=uni.id,
+            token_id=1,
+            cert_id="OLD-1",
+            student_internal_id="stu-old",
+            student_email="old@claims.example.edu",
+            wallet_address="0x0000000000000000000000000000000000000001",
+            status="pending",
+            created_at=base,
+        )
+        db.session.add(pending)
+        oldest_completed = StudentClaimRequest(
+            university_id=uni.id,
+            token_id=2,
+            cert_id="DONE-1",
+            student_internal_id="stu-done-1",
+            student_email="done1@claims.example.edu",
+            wallet_address="0x0000000000000000000000000000000000000002",
+            status="completed",
+            created_at=base + timedelta(minutes=1),
+        )
+        db.session.add(oldest_completed)
+        newest_completed_id_token = 202
+        for i in range(2, newest_completed_id_token + 1):
+            db.session.add(
+                StudentClaimRequest(
+                    university_id=uni.id,
+                    token_id=i + 1,
+                    cert_id=f"DONE-{i}",
+                    student_internal_id=f"stu-done-{i}",
+                    student_email=f"done{i}@claims.example.edu",
+                    wallet_address="0x0000000000000000000000000000000000000002",
+                    status="completed",
+                    created_at=base + timedelta(minutes=i),
+                )
+            )
+        db.session.commit()
+        pending_id = pending.id
+        dropped_completed_id = oldest_completed.id
+        try:
+            r = self.client.get(
+                "/api/university/student-claim-requests",
+                headers=self._uni_jwt_single_mint(user),
+            )
+            self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
+            ids = [row["id"] for row in (r.get_json() or {}).get("requests") or []]
+            self.assertIn(pending_id, ids)
+            self.assertNotIn(dropped_completed_id, ids)
+        finally:
+            StudentClaimRequest.query.filter_by(university_id=uni.id).delete(synchronize_session=False)
+            User.query.filter_by(id=user.id).delete(synchronize_session=False)
+            University.query.filter_by(id=uni.id).delete(synchronize_session=False)
+            db.session.commit()
 
 
 if __name__ == "__main__":
